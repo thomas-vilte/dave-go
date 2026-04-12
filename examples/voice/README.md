@@ -1,6 +1,6 @@
 # voice example
 
-Simple `disgo` voice example using `github.com/thomas-vilte/dave-go/session` as the DAVE session implementation.
+Small `disgo` voice example using `github.com/thomas-vilte/dave-go/session` as the DAVE session implementation.
 
 Environment variables:
 

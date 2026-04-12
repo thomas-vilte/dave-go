@@ -145,16 +145,16 @@ func TestExtractCiphertext(t *testing.T) {
 }
 
 func TestReconstructPlaintext(t *testing.T) {
-	// Caso real: el interleaved frame tiene bytes unencrypted en sus posiciones
-	// originales y ciphertext en las posiciones cifradas.
+	// Real-world case: the interleaved frame has unencrypted bytes at their original
+	// positions and ciphertext at the encrypted positions.
 	//
-	// Original: "ABCDEFGH" con rangos unencrypted {2,2} y {6,2}
-	//   - Posiciones 2-3 ("CD") y 6-7 ("GH") permanecen sin cifrar
-	//   - Posiciones 0-1 ("AB") y 4-5 ("EF") se cifran
+	// Original: "ABCDEFGH" with unencrypted ranges {2,2} and {6,2}
+	//   - Positions 2-3 ("CD") and 6-7 ("GH") stay unencrypted
+	//   - Positions 0-1 ("AB") and 4-5 ("EF") get encrypted
 	//
 	// Interleaved: [cc,dd,C,D,gg,hh,G,H] (cc,dd,gg,hh = ciphertext; C,D,G,H = plaintext)
-	// Decrypted:   [A,B,E,F] (plaintext descifrado de las posiciones cifradas)
-	// Resultado:   [A,B,C,D,E,F,G,H]
+	// Decrypted:   [A,B,E,F] (plaintext decrypted from encrypted positions)
+	// Result:      [A,B,C,D,E,F,G,H]
 	interleaved := []byte{0xCC, 0xDD, 67, 68, 0xEE, 0xFF, 71, 72}
 	decrypted := []byte{65, 66, 69, 70} // A,B,E,F
 	ranges := []Range{{2, 2}, {6, 2}}
@@ -166,7 +166,7 @@ func TestReconstructPlaintext(t *testing.T) {
 }
 
 func TestReconstructPlaintextFullEncrypt(t *testing.T) {
-	// Todo el frame fue cifrado (sin rangos unencrypted)
+	// The whole frame was encrypted (no unencrypted ranges)
 	interleaved := []byte("xxxxxxxx")
 	decrypted := []byte("ABCDEFGH")
 	got := ReconstructPlaintext(interleaved, decrypted, nil)
@@ -306,10 +306,10 @@ func TestDecryptTamperedFrame(t *testing.T) {
 		t.Fatalf("encrypt error: %v", err)
 	}
 
-	// Tampear el tag de autenticación (últimos 8 bytes del footer, antes del nonce)
-	// El tag está en la posición len(encrypted) - 3(suppl+magic) - len(nonce) - 8
-	// Para simplificar, tampeamos el primer byte del interleaved frame que es ciphertext
-	// (sin rangos unencrypted, todo el interleaved es ciphertext)
+	// Tamper with the authentication tag (last 8 bytes of the footer, before the nonce)
+	// The tag is at position len(encrypted) - 3(suppl+magic) - len(nonce) - 8
+	// To keep it simple, we tamper the first byte of the interleaved frame which is ciphertext
+	// (no unencrypted ranges, so the whole interleaved frame is ciphertext)
 	encrypted[0] ^= 0xFF
 	_, _, err = Decrypt(DecryptParams{
 		Ciphertext: encrypted,

@@ -34,10 +34,16 @@ func envOrDefault(key, fallback string) string {
 }
 
 func main() {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+	slog.SetDefault(logger)
+
 	slog.Info("starting up")
 	slog.Info("disgo version", slog.String("version", disgo.Version))
 
 	client, err := disgo.New(token,
+		bot.WithLogger(logger),
 		bot.WithGatewayConfigOpts(gateway.WithIntents(gateway.IntentGuildVoiceStates)),
 		bot.WithEventListenerFunc(func(e *events.Ready) {
 			go play(e.Client())
@@ -88,8 +94,7 @@ func play(client *bot.Client) {
 	go func() {
 		for {
 			if _, err := conn.UDP().ReadPacket(); err != nil {
-				slog.Error("error reading udp packet", slog.Any("err", err))
-				return
+				slog.Warn("error reading udp packet", slog.Any("err", err))
 			}
 		}
 	}()

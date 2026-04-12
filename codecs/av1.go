@@ -4,11 +4,11 @@ import (
 	"github.com/thomas-vilte/dave-go/frame"
 )
 
-// Tipos de OBU AV1 que se descartan durante la transformación del frame.
-// El packetizer de WebRTC descarta estos OBUs, por lo que el encryptor
-// debe eliminarlos para que el depacketizer vea el mismo frame.
+// AV1 OBU types that get dropped during frame transformation.
+// The WebRTC packetizer drops these OBUs, so the encryptor needs to remove them
+// too, otherwise the depacketizer would see a different frame.
 //
-// Referencia: protocol.md "AV1":
+// Reference: protocol.md "AV1":
 // "The header and payload for OBU types that would be dropped by the WebRTC
 // packetizer are dropped by the encrypting frame transformer"
 const (
@@ -17,24 +17,24 @@ const (
 	obuPadding           = 15
 )
 
-// prepareAV1Frame transforma el frame AV1 antes del cifrado y calcula los
-// rangos unencrypted del frame resultante.
+// prepareAV1Frame transforms the AV1 frame before encryption and computes the
+// unencrypted ranges of the resulting frame.
 //
-// Transformaciones aplicadas:
-//  1. Elimina OBUs de tipo Temporal Delimiter (2), Tile List (8) y Padding (15)
-//  2. Para el último OBU del frame transformado: limpia el bit obu_has_size_field
-//     (bit 1 del header) y elimina los bytes LEB128 del tamaño
+// Transformations applied:
+//  1. Drops OBUs of type Temporal Delimiter (2), Tile List (8), and Padding (15)
+//  2. For the last OBU of the transformed frame: clears the obu_has_size_field bit
+//     (bit 1 of the header) and removes the LEB128 size bytes
 //
-// La eliminación del tamaño en el último OBU es necesaria porque los datos
-// suplementarios DAVE se append al final del frame cifrado. Si el último OBU
-// tuviera un campo de tamaño, el depacketizer de WebRTC interpretaría los datos
-// suplementarios como parte del OBU.
+// Removing the size from the last OBU is needed because DAVE supplemental data
+// gets appended at the end of the encrypted frame. If the last OBU had a size
+// field, the WebRTC depacketizer would interpret the supplemental data as part
+// of the OBU.
 //
-// Los rangos retornados corresponden al frame transformado y cubren el header
-// de cada OBU (1 byte) + extensión opcional (1 byte) + LEB128 size (para OBUs
-// que no son el último). El payload de cada OBU se cifra completamente.
+// The returned ranges correspond to the transformed frame and cover each OBU's
+// header (1 byte) + optional extension (1 byte) + LEB128 size (for OBUs that
+// aren't the last). Each OBU's payload is fully encrypted.
 //
-// Referencia: protocol.md "AV1"
+// Reference: protocol.md "AV1"
 func prepareAV1Frame(payload []byte) ([]byte, []frame.Range, error) {
 	if len(payload) == 0 {
 		return nil, nil, nil
@@ -44,11 +44,11 @@ func prepareAV1Frame(payload []byte) ([]byte, []frame.Range, error) {
 		headerByte byte
 		hasExt     bool
 		extByte    byte
-		sizeBytes  []byte // bytes LEB128 del tamaño (vacío si obu_has_size_field=0)
-		data       []byte // payload del OBU
+		sizeBytes  []byte // LEB128 size bytes (empty if obu_has_size_field=0)
+		data       []byte // OBU payload
 	}
 
-	// Primera pasada: parsear OBUs y descartar los que no se deben cifrar.
+	// First pass: parse OBUs and drop the ones we shouldn't keep.
 	var obus []parsedOBU
 	offset := 0
 
@@ -80,7 +80,7 @@ func prepareAV1Frame(payload []byte) ([]byte, []frame.Range, error) {
 			payloadSize = int(size)
 			offset += n
 		} else {
-			// Sin campo de tamaño: el OBU ocupa el resto del frame
+			// No size field: the OBU takes up the rest of the frame
 			payloadSize = len(payload) - offset
 		}
 
@@ -109,7 +109,7 @@ func prepareAV1Frame(payload []byte) ([]byte, []frame.Range, error) {
 		return nil, nil, nil
 	}
 
-	// Segunda pasada: construir el frame transformado y calcular rangos.
+	// Second pass: build the transformed frame and compute ranges.
 	var transformed []byte
 	var ranges []frame.Range
 	writeOffset := 0
@@ -118,7 +118,7 @@ func prepareAV1Frame(payload []byte) ([]byte, []frame.Range, error) {
 		isLast := i == len(obus)-1
 		unencryptedStart := writeOffset
 
-		// Header byte: para el último OBU, limpiar obu_has_size_field (bit 1)
+		// Header byte: for the last OBU, clear obu_has_size_field (bit 1)
 		h := obu.headerByte
 		if isLast {
 			h &^= 0x02
@@ -132,14 +132,14 @@ func prepareAV1Frame(payload []byte) ([]byte, []frame.Range, error) {
 			writeOffset++
 		}
 
-		// LEB128 size: incluir en todos los OBUs excepto el último.
-		// El último OBU ya tiene obu_has_size_field=0, así que no lleva size.
+		// LEB128 size: include in all OBUs except the last one.
+		// The last OBU already has obu_has_size_field=0, so no size bytes needed.
 		if !isLast && len(obu.sizeBytes) > 0 {
 			transformed = append(transformed, obu.sizeBytes...)
 			writeOffset += len(obu.sizeBytes)
 		}
 
-		// El header (+ ext + size si no es último) permanece sin cifrar
+		// The header (+ ext + size if not last) stays unencrypted
 		unencryptedLen := writeOffset - unencryptedStart
 		if unencryptedLen > 0 {
 			ranges = append(ranges, frame.Range{
@@ -148,7 +148,7 @@ func prepareAV1Frame(payload []byte) ([]byte, []frame.Range, error) {
 			})
 		}
 
-		// Payload del OBU: se cifra completamente
+		// OBU payload: gets fully encrypted
 		transformed = append(transformed, obu.data...)
 		writeOffset += len(obu.data)
 	}
@@ -156,16 +156,16 @@ func prepareAV1Frame(payload []byte) ([]byte, []frame.Range, error) {
 	return transformed, ranges, nil
 }
 
-// shouldDropOBU indica si un tipo de OBU debe ser descartado completamente
-// durante la transformación del frame.
+// shouldDropOBU returns whether an OBU type should be dropped entirely
+// during frame transformation.
 func shouldDropOBU(obuType byte) bool {
 	return obuType == obuTemporalDelimiter ||
 		obuType == obuTileList ||
 		obuType == obuPadding
 }
 
-// decodeLEB128 decodifica un entero LEB128 unsigned (hasta 8 bytes).
-// Retorna el valor, el número de bytes consumidos y un posible error.
+// decodeLEB128 decodes an unsigned LEB128 integer (up to 8 bytes).
+// Returns the value, number of bytes consumed, and any error.
 func decodeLEB128(data []byte) (uint64, int, error) {
 	if len(data) == 0 {
 		return 0, 0, frame.ErrInvalidULEB128

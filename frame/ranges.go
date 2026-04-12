@@ -1,15 +1,15 @@
 package frame
 
-// ValidateRanges verifica que los rangos unencrypted sean válidos:
-//   - offsets y lengths no negativos
-//   - no se salen del tamaño del frame
-//   - están ordenados por offset ascendente
-//   - no se solapan entre sí
+// ValidateRanges checks that the unencrypted ranges are valid:
+//   - offsets and lengths are non-negative
+//   - they don't exceed the frame size
+//   - they are sorted by ascending offset
+//   - they don't overlap each other
 //
-// Esta validación es crítica porque rangos inválidos podrían causar
-// corrupción de memoria o bypass de cifrado.
+// This validation is critical because invalid ranges could cause
+// memory corruption or encryption bypass.
 //
-// Referencia: protocol.md "Protocol Frame Check":
+// Reference: protocol.md "Protocol Frame Check":
 // "Must be ordered by ascending range offset"
 // "Must be distinct and not overlapping"
 // "Must not overflow the total size of the interleaved media frame"
@@ -30,8 +30,8 @@ func ValidateRanges(ranges []Range, size int) error {
 	return nil
 }
 
-// ContiguousPlaintextSize calcula cuántos bytes del frame serán cifrados,
-// es decir, el tamaño total menos los bytes en los rangos unencrypted.
+// ContiguousPlaintextSize calculates how many bytes of the frame will be encrypted,
+// i.e. the total size minus the bytes in the unencrypted ranges.
 func ContiguousPlaintextSize(frameSize int, ranges []Range) int {
 	size := frameSize
 	for _, r := range ranges {
@@ -40,18 +40,18 @@ func ContiguousPlaintextSize(frameSize int, ranges []Range) int {
 	return size
 }
 
-// ReconstructPlaintext reconstruye el plaintext original a partir del frame
-// interleaved y los bytes descifrados.
+// ReconstructPlaintext reconstructs the original plaintext from the interleaved
+// frame and the decrypted bytes.
 //
-// El frame interleaved tiene los bytes unencrypted en sus posiciones originales
-// y bytes cifrados en las posiciones cifradas. Esta función reemplaza las
-// posiciones cifradas con los bytes descifrados.
+// The interleaved frame has unencrypted bytes at their original positions and
+// ciphertext at the encrypted positions. This function replaces the encrypted
+// positions with the decrypted bytes.
 //
-// Diagrama:
+// Diagram:
 //
 //	Interleaved: [UUccccUUcccc]  (U=unencrypted original, c=ciphertext)
-//	Decrypted:   [CCCC]          (bytes descifrados concatenados)
-//	Resultado:   [UUCCCCUUCCCC]  (plaintext original reconstruido)
+//	Decrypted:   [CCCC]          (concatenated decrypted bytes)
+//	Result:      [UUCCCCUUCCCC]  (reconstructed original plaintext)
 func ReconstructPlaintext(interleaved []byte, decrypted []byte, ranges []Range) []byte {
 	out := make([]byte, len(interleaved))
 	copy(out, interleaved)
@@ -59,7 +59,7 @@ func ReconstructPlaintext(interleaved []byte, decrypted []byte, ranges []Range) 
 	cipherPos := 0
 	last := 0
 	for _, r := range ranges {
-		// Copiar decrypted en la zona entre el último rango y este rango
+		// Copy decrypted into the gap between the last range and this one
 		if r.Offset > last {
 			n := r.Offset - last
 			copy(out[last:r.Offset], decrypted[cipherPos:cipherPos+n])
@@ -67,20 +67,20 @@ func ReconstructPlaintext(interleaved []byte, decrypted []byte, ranges []Range) 
 		}
 		last = r.Offset + r.Length
 	}
-	// Copiar el resto del decrypted después del último rango
+	// Copy the rest of the decrypted after the last range
 	if last < len(interleaved) {
 		copy(out[last:], decrypted[cipherPos:])
 	}
 	return out
 }
 
-// ExtractCiphertext extrae los bytes cifrados del frame interleaved,
-// es decir, todos los bytes que NO están en los rangos unencrypted.
+// ExtractCiphertext extracts the ciphertext bytes from the interleaved frame,
+// i.e. all bytes that are NOT in the unencrypted ranges.
 //
-// Diagrama:
+// Diagram:
 //
 //	Interleaved: [UUccccUUcccc]  (U=unencrypted, c=ciphertext)
-//	Retornado:   [cccccccc]      (solo bytes cifrados concatenados)
+//	Returned:    [cccccccc]      (just the ciphertext bytes concatenated)
 func ExtractCiphertext(interleaved []byte, ranges []Range) []byte {
 	size := ContiguousPlaintextSize(len(interleaved), ranges)
 	out := make([]byte, 0, size)

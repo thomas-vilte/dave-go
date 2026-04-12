@@ -28,5 +28,4 @@ voice.WithDaveSessionCreateFunc(session.NewSession)
 ## Notes
 
 - the example streams Opus frames from a local `.dca` file
-- some package docs are still in spanish for now because i copied them over from my bot repo first
-- i'll clean that up later
+- package documentation is now in English, but some internal comments may still be cleaned up over time

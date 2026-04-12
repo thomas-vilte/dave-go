@@ -120,8 +120,8 @@ func deriveKeyForGeneration(secret *ciphersuite.Secret, generation uint32) ([]by
 	context := make([]byte, 4)
 	binary.BigEndian.PutUint32(context, generation)
 
-	// DAVE usa derive_tree_secret(secret, "key", generation, 16), que internamente
-	// serializa generation como uint32 big-endian dentro del contexto de KDF.
+	// DAVE uses derive_tree_secret(secret, "key", generation, 16), which internally
+	// serializes generation as a big-endian uint32 within the KDF context.
 	key, err := secret.KdfExpandLabel("key", context, MediaKeyLen)
 	if err != nil {
 		return nil, fmt.Errorf("derive generation key %d: %w", generation, err)
@@ -132,8 +132,8 @@ func advanceSecret(secret *ciphersuite.Secret, generation uint32) (*ciphersuite.
 	context := make([]byte, 4)
 	binary.BigEndian.PutUint32(context, generation)
 
-	// DAVE avanza el ratchet con derive_tree_secret(secret, "secret", generation, 32).
-	// El secreto interno pasa a longitud de hash (SHA-256 => 32 bytes), no se mantiene en 16.
+	// DAVE advances the ratchet with derive_tree_secret(secret, "secret", generation, 32).
+	// The inner secret grows to hash length (SHA-256 => 32 bytes), it doesn't stay at 16.
 	next, err := secret.KdfExpandLabel("secret", context, 32)
 	if err != nil {
 		return nil, fmt.Errorf("advance generation %d: %w", generation, err)
