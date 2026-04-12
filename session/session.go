@@ -9,14 +9,15 @@ import (
 	"time"
 
 	"github.com/disgoorg/godave"
+
 	"github.com/thomas-vilte/dave-go/codecs"
 	"github.com/thomas-vilte/dave-go/frame"
 	"github.com/thomas-vilte/dave-go/mediakeys"
 )
 
-var _ godave.Session = (*Session)(nil)
+var _ godave.Session = (*session)(nil)
 
-type Session struct {
+type session struct {
 	logger    *slog.Logger
 	userID    godave.UserID
 	callbacks godave.Callbacks
@@ -77,12 +78,12 @@ type senderState struct {
 	expander *mediakeys.NonceExpander
 }
 
-func NewSession(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) godave.Session {
+func New(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) godave.Session {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	return &Session{
+	return &session{
 		logger:      logger,
 		userID:      userID,
 		callbacks:   callbacks,
@@ -93,31 +94,31 @@ func NewSession(logger *slog.Logger, userID godave.UserID, callbacks godave.Call
 	}
 }
 
-func (s *Session) MaxSupportedProtocolVersion() int {
+func (s *session) MaxSupportedProtocolVersion() int {
 	return 1
 }
 
-func (s *Session) SetChannelID(channelID godave.ChannelID) {
+func (s *session) SetChannelID(channelID godave.ChannelID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.channelID = channelID
 }
 
-func (s *Session) AssignSsrcToCodec(ssrc uint32, codec godave.Codec) {
+func (s *session) AssignSsrcToCodec(ssrc uint32, codec godave.Codec) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ssrcCodecs[ssrc] = toCodecKind(codec)
 }
 
-func (s *Session) MaxEncryptedFrameSize(frameSize int) int {
+func (s *session) MaxEncryptedFrameSize(frameSize int) int {
 	return frameSize + 64
 }
 
-func (s *Session) resetEpochReadyLocked() {
+func (s *session) resetEpochReadyLocked() {
 	s.epochReady = make(chan struct{})
 }
 
-func (s *Session) signalEpochReadyLocked() {
+func (s *session) signalEpochReadyLocked() {
 	select {
 	case <-s.epochReady:
 		return
@@ -126,7 +127,7 @@ func (s *Session) signalEpochReadyLocked() {
 	}
 }
 
-func (s *Session) waitForActiveEpoch(timeout time.Duration) error {
+func (s *session) waitForActiveEpoch(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	waitLogged := false
 
@@ -163,7 +164,7 @@ func (s *Session) waitForActiveEpoch(timeout time.Duration) error {
 	}
 }
 
-func (s *Session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) (int, error) {
+func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) (int, error) {
 	s.mu.RLock()
 	_, ok := s.ssrcCodecs[ssrc]
 	s.mu.RUnlock()
@@ -211,11 +212,11 @@ func (s *Session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 	return n, nil
 }
 
-func (s *Session) MaxDecryptedFrameSize(_ godave.UserID, frameSize int) int {
+func (s *session) MaxDecryptedFrameSize(_ godave.UserID, frameSize int) int {
 	return frameSize
 }
 
-func (s *Session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame []byte) (int, error) {
+func (s *session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame []byte) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -277,19 +278,19 @@ func (s *Session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 	return 0, ErrDecryptionFailed
 }
 
-func (s *Session) AddUser(userID godave.UserID) {
+func (s *session) AddUser(userID godave.UserID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.users[userID] = struct{}{}
 }
 
-func (s *Session) RemoveUser(userID godave.UserID) {
+func (s *session) RemoveUser(userID godave.UserID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.users, userID)
 }
 
-func (s *Session) OnSelectProtocolAck(protocolVersion uint16) {
+func (s *session) OnSelectProtocolAck(protocolVersion uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.protocolVersion = protocolVersion
@@ -300,14 +301,14 @@ func (s *Session) OnSelectProtocolAck(protocolVersion uint16) {
 	}
 }
 
-func (s *Session) OnDavePrepareTransition(transitionID uint16, protocolVersion uint16) {
+func (s *session) OnDavePrepareTransition(transitionID uint16, protocolVersion uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pendingTransitionID = transitionID
 	s.protocolVersion = protocolVersion
 }
 
-func (s *Session) OnDaveExecuteTransition(transitionID uint16) {
+func (s *session) OnDaveExecuteTransition(transitionID uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -317,7 +318,7 @@ func (s *Session) OnDaveExecuteTransition(transitionID uint16) {
 	s.pendingTransitionID = 0
 }
 
-func (s *Session) OnDavePrepareEpoch(epoch int, protocolVersion uint16) {
+func (s *session) OnDavePrepareEpoch(epoch int, protocolVersion uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -345,7 +346,7 @@ func (s *Session) OnDavePrepareEpoch(epoch int, protocolVersion uint16) {
 	}
 }
 
-func (s *Session) OnDaveMLSExternalSenderPackage(externalSenderPackage []byte) {
+func (s *session) OnDaveMLSExternalSenderPackage(externalSenderPackage []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.externalSenderPackage = append([]byte(nil), externalSenderPackage...)
@@ -354,7 +355,7 @@ func (s *Session) OnDaveMLSExternalSenderPackage(externalSenderPackage []byte) {
 	}
 }
 
-func (s *Session) OnDaveMLSProposals(proposals []byte) {
+func (s *session) OnDaveMLSProposals(proposals []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastProposalBatch = append([]byte(nil), proposals...)
@@ -375,7 +376,7 @@ func (s *Session) OnDaveMLSProposals(proposals []byte) {
 
 // processAndCommitProposalBatchLocked processes a proposal batch and commits.
 // Must be called with s.mu held.
-func (s *Session) processAndCommitProposalBatchLocked(proposals []byte) {
+func (s *session) processAndCommitProposalBatchLocked(proposals []byte) {
 	if err := s.ensureMLSClientLocked(); err != nil {
 		s.logger.Error("failed to init mls client", "error", err)
 		return
@@ -400,7 +401,7 @@ func (s *Session) processAndCommitProposalBatchLocked(proposals []byte) {
 	}())
 }
 
-func (s *Session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMessage []byte) {
+func (s *session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMessage []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -460,7 +461,7 @@ func (s *Session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMe
 	}
 }
 
-func (s *Session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
+func (s *session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

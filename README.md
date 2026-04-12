@@ -22,7 +22,7 @@ It works, but there are still a few rough edges and things I want to clean up.
 There is a small `disgo` voice example in `examples/voice` using:
 
 ```go
-voice.WithDaveSessionCreateFunc(session.NewSession)
+voice.WithDaveSessionCreateFunc(session.New)
 ```
 
 ## Notes

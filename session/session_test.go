@@ -14,7 +14,7 @@ func (testCallbacks) SendReadyForTransition(uint16) error   { return nil }
 func (testCallbacks) SendInvalidCommitWelcome(uint16) error { return nil }
 
 func TestNewSession(t *testing.T) {
-	s := NewSession(nil, "test_user", testCallbacks{})
+	s := New(nil, "test_user", testCallbacks{})
 	if s == nil {
 		t.Fatal("NewSession returned nil")
 	}
@@ -24,7 +24,7 @@ func TestNewSession(t *testing.T) {
 }
 
 func TestMaxEncryptedFrameSize(t *testing.T) {
-	s := NewSession(nil, "test_user", testCallbacks{})
+	s := New(nil, "test_user", testCallbacks{})
 	got := s.MaxEncryptedFrameSize(100)
 	if got != 164 {
 		t.Fatalf("expected 164, got %d", got)
@@ -32,7 +32,7 @@ func TestMaxEncryptedFrameSize(t *testing.T) {
 }
 
 func TestMaxDecryptedFrameSize(t *testing.T) {
-	s := NewSession(nil, "test_user", testCallbacks{})
+	s := New(nil, "test_user", testCallbacks{})
 	got := s.MaxDecryptedFrameSize("user1", 200)
 	if got != 200 {
 		t.Fatalf("expected 200, got %d", got)
@@ -40,10 +40,10 @@ func TestMaxDecryptedFrameSize(t *testing.T) {
 }
 
 func TestAssignSsrcToCodec(t *testing.T) {
-	s := NewSession(nil, "test_user", testCallbacks{})
+	s := New(nil, "test_user", testCallbacks{})
 	s.AssignSsrcToCodec(12345, godave.CodecOpus)
 
-	sess := s.(*Session)
+	sess := s.(*session)
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 
@@ -53,11 +53,11 @@ func TestAssignSsrcToCodec(t *testing.T) {
 }
 
 func TestAddRemoveUser(t *testing.T) {
-	s := NewSession(nil, "test_user", testCallbacks{})
+	s := New(nil, "test_user", testCallbacks{})
 	s.AddUser("user1")
 	s.AddUser("user2")
 
-	sess := s.(*Session)
+	sess := s.(*session)
 	sess.mu.RLock()
 	if len(sess.users) != 2 {
 		t.Fatalf("expected 2 users, got %d", len(sess.users))
@@ -73,10 +73,10 @@ func TestAddRemoveUser(t *testing.T) {
 }
 
 func TestSetChannelID(t *testing.T) {
-	s := NewSession(nil, "test_user", testCallbacks{})
+	s := New(nil, "test_user", testCallbacks{})
 	s.SetChannelID(42)
 
-	sess := s.(*Session)
+	sess := s.(*session)
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 
@@ -86,10 +86,10 @@ func TestSetChannelID(t *testing.T) {
 }
 
 func TestOnSelectProtocolAck(t *testing.T) {
-	s := NewSession(nil, "test_user", testCallbacks{})
+	s := New(nil, "test_user", testCallbacks{})
 	s.OnSelectProtocolAck(1)
 
-	sess := s.(*Session)
+	sess := s.(*session)
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 
@@ -99,10 +99,10 @@ func TestOnSelectProtocolAck(t *testing.T) {
 }
 
 func TestOnDavePrepareTransition(t *testing.T) {
-	s := NewSession(nil, "test_user", testCallbacks{})
+	s := New(nil, "test_user", testCallbacks{})
 	s.OnDavePrepareTransition(5, 1)
 
-	sess := s.(*Session)
+	sess := s.(*session)
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 
@@ -112,10 +112,10 @@ func TestOnDavePrepareTransition(t *testing.T) {
 }
 
 func TestOnDaveExecuteTransitionNoPendingEpoch(t *testing.T) {
-	s := NewSession(nil, "test_user", testCallbacks{})
+	s := New(nil, "test_user", testCallbacks{})
 	s.OnDaveExecuteTransition(5)
 
-	sess := s.(*Session)
+	sess := s.(*session)
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 
@@ -128,8 +128,8 @@ func TestOnDaveExecuteTransitionNoPendingEpoch(t *testing.T) {
 }
 
 func TestOnDavePrepareEpochReset(t *testing.T) {
-	s := NewSession(nil, "test_user", testCallbacks{})
-	sess := s.(*Session)
+	s := New(nil, "test_user", testCallbacks{})
+	sess := s.(*session)
 
 	sess.activeEpoch = &epochState{id: 99}
 	sess.pendingEpoch = &epochState{id: 100}
@@ -148,8 +148,8 @@ func TestOnDavePrepareEpochReset(t *testing.T) {
 }
 
 func TestEncryptNoActiveEpoch(t *testing.T) {
-	s := NewSession(nil, "test_user", testCallbacks{})
-	sess := s.(*Session)
+	s := New(nil, "test_user", testCallbacks{})
+	sess := s.(*session)
 	sess.sendCounter.Next()
 
 	_, err := sess.Encrypt(12345, []byte{0x01, 0x02}, make([]byte, 256))
@@ -159,7 +159,7 @@ func TestEncryptNoActiveEpoch(t *testing.T) {
 }
 
 func TestDecryptNoActiveEpoch(t *testing.T) {
-	s := NewSession(nil, "test_user", testCallbacks{})
+	s := New(nil, "test_user", testCallbacks{})
 
 	// Use a frame that passes LooksLikeDAVEFrame so the epoch check is reached.
 	// 11 bytes minimum with 0xFA 0xFA magic marker at the end.

@@ -2,6 +2,7 @@ package mediakeys
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -47,7 +48,7 @@ func TestDeriveSenderBaseSecret(t *testing.T) {
 
 func TestDeriveSenderBaseSecretNilExporter(t *testing.T) {
 	_, err := DeriveSenderBaseSecret(nil, 42)
-	if err != ErrNilExporter {
+	if !errors.Is(err, ErrNilExporter) {
 		t.Fatalf("expected ErrNilExporter, got %v", err)
 	}
 }

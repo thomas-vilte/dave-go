@@ -59,7 +59,7 @@ func TestExportWithMLSExporterSecretDiffersFromRFCExporter(t *testing.T) {
 		t.Fatalf("ExportWithMLSExporterSecret error: %v", err)
 	}
 
-	rfcExport, err := schedule.Exporter(exporterSecret, ciphersuite.MLS128DHKEMP256, schedule.ExporterLabel(ExporterLabel), ctx, BaseSecretLen)
+	rfcExport, err := schedule.Exporter(exporterSecret, ciphersuite.MLS128DHKEMP256, ExporterLabel, ctx, BaseSecretLen)
 	if err != nil {
 		t.Fatalf("schedule.Exporter error: %v", err)
 	}
