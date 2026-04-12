@@ -1,12 +1,12 @@
-// Package codecs implementa la lógica codec-aware para determinar qué bytes
-// de un frame de media deben permanecer sin cifrar según el protocolo DAVE.
+// Package codecs handles the codec-aware logic to figure out which bytes
+// of a media frame should stay unencrypted under the DAVE protocol.
 //
-// Cada codec tiene requisitos distintos sobre qué metadata debe permanecer
-// accesible para los packetizers/depacketizers de WebRTC. El encryptor DAVE
-// es codec-aware (conoce la estructura de cada codec), mientras que el
-// decryptor es codec-unaware (usa los rangos unencrypted del footer).
+// Each codec has different requirements around what metadata needs to stay
+// readable for WebRTC packetizers/depacketizers. The DAVE encryptor is
+// codec-aware (knows the structure of each codec), while the decryptor is
+// codec-unaware (just uses the unencrypted ranges from the footer).
 //
-// Referencia: protocol.md "Codec Handling":
+// Reference: protocol.md "Codec Handling":
 // "The encrypting frame transformer is codec-aware and processes incoming
 // encoded frames from WebRTC to determine which ranges must be left
 // unencrypted"
@@ -14,7 +14,7 @@ package codecs
 
 import "github.com/thomas-vilte/dave-go/frame"
 
-// Kind identifica el codec de un frame de media.
+// Kind identifies the codec of a media frame.
 type Kind uint8
 
 const (
@@ -27,17 +27,17 @@ const (
 	CodecAV1
 )
 
-// Encrypt cifra un frame de media de forma codec-aware según el protocolo DAVE.
+// Encrypt encrypts a media frame in a codec-aware way following the DAVE protocol.
 //
-// Es la API recomendada para la capa dave/session. Maneja las particularidades
-// de cada codec internamente:
-//   - H264/H265: reintenta con nonce incrementado si el ciphertext contiene
-//     start code sequences (hasta 10 intentos).
-//   - AV1: transforma el frame primero (elimina OBUs innecesarios y el campo
-//     de tamaño del último OBU) y luego cifra el frame transformado.
-//   - OPUS, VP8, VP9: calcula los rangos unencrypted y cifra directamente.
+// This is the recommended API for the dave/session layer. It handles each codec's
+// quirks internally:
+//   - H264/H265: retries with an incremented nonce if the ciphertext contains
+//     start code sequences (up to 10 attempts).
+//   - AV1: transforms the frame first (strips unnecessary OBUs and the size
+//     field from the last OBU) then encrypts the transformed frame.
+//   - OPUS, VP8, VP9: figures out the unencrypted ranges and encrypts directly.
 //
-// Referencia: protocol.md "Codec Handling"
+// Reference: protocol.md "Codec Handling"
 func Encrypt(kind Kind, plaintext, key []byte, nonce uint32) ([]byte, error) {
 	switch kind {
 	case CodecH264, CodecH265:
@@ -67,18 +67,17 @@ func Encrypt(kind Kind, plaintext, key []byte, nonce uint32) ([]byte, error) {
 	}
 }
 
-// UnencryptedRanges determina qué porciones del payload de un frame deben
-// permanecer sin cifrar según el codec.
+// UnencryptedRanges figures out which portions of a frame payload should stay
+// unencrypted depending on the codec.
 //
-// Retorna nil cuando todo el frame puede ser cifrado (OPUS, VP9).
-// Retorna rangos con offset/length cuando hay metadata que debe permanecer
-// en plaintext para los packetizers/depacketizers de WebRTC.
+// Returns nil when the whole frame can be encrypted (OPUS, VP9).
+// Returns ranges with offset/length when there's metadata that needs to stay
+// in plaintext for WebRTC packetizers/depacketizers.
 //
-// Nota: para AV1, este método no puede usarse directamente porque el codec
-// requiere transformar el frame antes de calcular los rangos. Usar Encrypt
-// en su lugar.
+// Note: for AV1, this method can't be used directly since the codec requires
+// transforming the frame before computing ranges. Use Encrypt instead.
 //
-// Referencia: protocol.md "Codec Handling" y secciones específicas por codec.
+// Reference: protocol.md "Codec Handling" and codec-specific sections.
 func UnencryptedRanges(kind Kind, payload []byte) ([]frame.Range, error) {
 	switch kind {
 	case CodecOpus, CodecVP9:

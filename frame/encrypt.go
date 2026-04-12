@@ -5,20 +5,20 @@ import (
 	"fmt"
 )
 
-// Encrypt cifra un frame de media según el formato DAVE.
+// Encrypt encrypts a media frame following the DAVE format.
 //
-// Proceso:
-//  1. Valida que la key sea de 16 bytes (AES-128)
-//  2. Valida que los rangos unencrypted sean válidos (ordenados, no solapados, dentro del frame)
-//  3. Extrae los bytes que van a ser cifrados (todo lo que NO está en los rangos unencrypted)
-//  4. Construye el AAD con los bytes unencrypted (protocol.md: "All of the unencrypted ranges
+// Process:
+//  1. Validates the key is 16 bytes (AES-128)
+//  2. Validates unencrypted ranges are valid (ordered, non-overlapping, within frame)
+//  3. Extracts the bytes to be encrypted (everything NOT in the unencrypted ranges)
+//  4. Builds the AAD from the unencrypted bytes (protocol.md: "All of the unencrypted ranges
 //     from the frame are joined together and included as additional data")
-//  5. Cifra con AES-128-GCM (tag truncado a 8 bytes) usando el nonce expandido a 96 bits
-//  6. Construye el frame interleaved: copia el frame original y reemplaza las zonas cifradas
-//     con el ciphertext
-//  7. Construye el footer: tag(8) + nonce(ULEB128) + ranges(ULEB128 pairs) + supplSize + 0xFAFA
+//  5. Encrypts with AES-128-GCM (tag truncated to 8 bytes) using the nonce expanded to 96 bits
+//  6. Builds the interleaved frame: copies the original frame and replaces encrypted zones
+//     with ciphertext
+//  7. Builds the footer: tag(8) + nonce(ULEB128) + ranges(ULEB128 pairs) + supplSize + 0xFAFA
 //
-// Referencia: protocol.md "Payload Format", "Interleaved protocol media frame"
+// Reference: protocol.md "Payload Format", "Interleaved protocol media frame"
 func Encrypt(params EncryptParams) ([]byte, error) {
 	if len(params.Key) != 16 {
 		return nil, ErrInvalidKeyLength
@@ -32,17 +32,17 @@ func Encrypt(params EncryptParams) ([]byte, error) {
 		return nil, err
 	}
 
-	// Nonce expandido a 96 bits: 8 bytes cero + 4 bytes del truncated nonce.
-	// libdave copia el uint32 truncado byte a byte al final del nonce (memcpy),
-	// lo que en plataformas little-endian produce un layout little-endian.
+	// Nonce expanded to 96 bits: 8 zero bytes + 4 bytes from the truncated nonce.
+	// libdave copies the truncated uint32 byte-by-byte to the end of the nonce (memcpy),
+	// which on little-endian platforms produces a little-endian layout.
 	nonce := make([]byte, 12)
 	binary.LittleEndian.PutUint32(nonce[8:], params.TruncatedNonce)
 
-	// Extraer bytes cifrados (todo lo que NO está en rangos unencrypted)
+	// Extract ciphertext bytes (everything NOT in unencrypted ranges)
 	ciphertext := ExtractCiphertext(params.Plaintext, params.UnencryptedRanges)
 
-	// AAD = concatenación de los bytes unencrypted en orden
-	// Referencia: protocol.md "Interleaved protocol media frame":
+	// AAD = concatenation of unencrypted bytes in order
+	// Reference: protocol.md "Interleaved protocol media frame":
 	// "All of the (potentially discontiguous) unencrypted ranges from the frame are joined
 	// together and included as additional data to be authenticated by the AEAD ciphersuite"
 	aad := buildAAD(params.Plaintext, params.UnencryptedRanges)
@@ -52,18 +52,18 @@ func Encrypt(params EncryptParams) ([]byte, error) {
 	ciphertextOut := sealed[:len(sealed)-8]
 	tag := sealed[len(sealed)-8:]
 
-	// Cuando no hay rangos unencrypted (p. ej. Opus), todo el frame interleaved
-	// debe ser ciphertext. Si usamos el plaintext como base, buildInterleaved no
-	// reemplaza nada y termina devolviendo el frame original sin cifrar.
+	// When there are no unencrypted ranges (e.g. Opus), the whole interleaved frame
+	// should be ciphertext. If we use plaintext as the base, buildInterleaved won't
+	// replace anything and ends up returning the original unencrypted frame.
 	baseFrame := params.Plaintext
 	if len(params.UnencryptedRanges) == 0 {
 		baseFrame = ciphertextOut
 	}
 
-	// Construir frame interleaved: frame original con zonas cifradas reemplazadas por ciphertext
+	// Build interleaved frame: original frame with encrypted zones replaced by ciphertext
 	out := buildInterleaved(baseFrame, params.UnencryptedRanges, ciphertextOut)
 
-	// Construir footer
+	// Build footer
 	out = append(out, tag...)
 
 	nonceBytes := EncodeULEB128(params.TruncatedNonce)
@@ -76,9 +76,9 @@ func Encrypt(params EncryptParams) ([]byte, error) {
 	}
 	out = append(out, rangesData...)
 
-	// Suppl. Size incluye todo el contenido suplementario:
-	// tag(8) + nonce(ULEB128) + rangesData + este byte(1) + magic(2)
-	// Referencia: protocol.md "Protocol supplemental data size"
+	// Suppl. Size covers all the supplemental content:
+	// tag(8) + nonce(ULEB128) + rangesData + this byte(1) + magic(2)
+	// Reference: protocol.md "Protocol supplemental data size"
 	supplSize := uint8(8 + len(nonceBytes) + len(rangesData) + 1 + 2)
 	out = append(out, supplSize)
 	out = append(out, 0xFA, 0xFA)
@@ -86,18 +86,18 @@ func Encrypt(params EncryptParams) ([]byte, error) {
 	return out, nil
 }
 
-// Decrypt descifra un frame DAVE y retorna el plaintext original junto con el nonce.
+// Decrypt decrypts a DAVE frame and returns the original plaintext along with the nonce.
 //
-// Proceso:
-//  1. Valida que la key sea de 16 bytes
-//  2. Verifica que el frame pase el protocol frame check (magic marker 0xFAFA)
-//  3. Parsea el footer para extraer tag, nonce, y rangos unencrypted
-//  4. Extrae los bytes cifrados del frame interleaved (posiciones fuera de los rangos)
-//  5. Construye el AAD con los bytes unencrypted del frame interleaved
-//  6. Descifra con AES-128-GCM verificando el tag de autenticación
-//  7. Reconstruye el plaintext original re-insertando el decrypted en las posiciones cifradas
+// Process:
+//  1. Validates the key is 16 bytes
+//  2. Checks that the frame passes the protocol frame check (magic marker 0xFAFA)
+//  3. Parses the footer to extract tag, nonce, and unencrypted ranges
+//  4. Extracts the ciphertext from the interleaved frame (bytes outside the ranges)
+//  5. Builds the AAD from the unencrypted bytes of the interleaved frame
+//  6. Decrypts with AES-128-GCM, verifying the authentication tag
+//  7. Reconstructs the original plaintext by re-inserting the decrypted bytes into the encrypted positions
 //
-// Referencia: protocol.md "Payload Format", "Protocol Frame Check"
+// Reference: protocol.md "Payload Format", "Protocol Frame Check"
 func Decrypt(params DecryptParams) ([]byte, uint32, error) {
 	if len(params.Key) != 16 {
 		return nil, 0, ErrInvalidKeyLength
@@ -116,40 +116,40 @@ func Decrypt(params DecryptParams) ([]byte, uint32, error) {
 		return nil, 0, err
 	}
 
-	// Expandir nonce truncado (32 bits) a nonce completo (96 bits)
-	// Referencia: protocol.md "Truncated synchronization nonce":
+	// Expand truncated nonce (32 bits) to full nonce (96 bits)
+	// Reference: protocol.md "Truncated synchronization nonce":
 	// "The full-size nonce is produced by writing the truncated nonce to the 4 least
 	// significant bytes and making the 8 most significant bytes all zero"
 	nonce := make([]byte, 12)
 	binary.LittleEndian.PutUint32(nonce[8:], parsed.TruncatedNonce)
 
-	// Extraer ciphertext del frame interleaved (bytes fuera de los rangos unencrypted)
+	// Extract ciphertext from interleaved frame (bytes outside unencrypted ranges)
 	ciphertext := ExtractCiphertext(parsed.InterleavedFrame, parsed.UnencryptedRanges)
 
-	// AAD = bytes unencrypted del frame interleaved (mismos que se usaron en Encrypt)
+	// AAD = unencrypted bytes from interleaved frame (same ones used in Encrypt)
 	aad := buildAAD(parsed.InterleavedFrame, parsed.UnencryptedRanges)
 
-	// Reconstruir el sealed message: ciphertext + tag
+	// Reconstruct the sealed message: ciphertext + tag
 	sealed := append(ciphertext, parsed.Tag...)
 	plaintext, err := gcm.Open(nil, nonce, sealed, aad)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	// Reconstruir plaintext original: insertar decrypted en las posiciones cifradas
+	// Reconstruct original plaintext: insert decrypted bytes into encrypted positions
 	result := ReconstructPlaintext(parsed.InterleavedFrame, plaintext, parsed.UnencryptedRanges)
 	return result, parsed.TruncatedNonce, nil
 }
 
-// LooksLikeDAVEFrame verifica rápidamente si un packet podría ser un frame DAVE
-// chequeando el magic marker 0xFAFA en la posición esperada y el tamaño mínimo.
+// LooksLikeDAVEFrame does a quick check to see if a packet could be a DAVE frame
+// by checking the magic marker 0xFAFA at the expected position and the minimum size.
 //
-// El tamaño mínimo de 11 bytes corresponde a:
-// tag(8) + nonce_mínimo(1) + supplSize(1) + magic(2) = 12 bytes de footer
-// pero con 0 bytes de interleaved frame, el total mínimo es 12.
-// Usamos 11 como umbral conservador para el check rápido.
+// The minimum size of 11 bytes corresponds to:
+// tag(8) + min nonce(1) + supplSize(1) + magic(2) = 12 bytes of footer
+// but with 0 bytes of interleaved frame, the total minimum is 12.
+// We use 11 as a conservative threshold for the quick check.
 //
-// Referencia: protocol.md "Protocol Frame Check"
+// Reference: protocol.md "Protocol Frame Check"
 func LooksLikeDAVEFrame(packet []byte) bool {
 	if len(packet) < 11 {
 		return false
@@ -160,14 +160,14 @@ func LooksLikeDAVEFrame(packet []byte) bool {
 	return true
 }
 
-// buildAAD construye el Additional Authenticated Data concatenando los bytes
-// de los rangos unencrypted del frame en orden ascendente.
+// buildAAD builds the Additional Authenticated Data by concatenating the bytes
+// from the frame's unencrypted ranges in ascending order.
 //
-// Estos bytes se incluyen en el AAD para que el SFU no pueda modificarlos sin
-// invalidar la autenticación, pero permanecen en plaintext para que los
-// packetizers/depacketizers de WebRTC puedan leerlos.
+// These bytes are included in the AAD so the SFU can't modify them without
+// invalidating the authentication, while keeping them in plaintext so WebRTC
+// packetizers/depacketizers can read them.
 //
-// Referencia: protocol.md "Interleaved protocol media frame":
+// Reference: protocol.md "Interleaved protocol media frame":
 // "All of the (potentially discontiguous) unencrypted ranges from the frame are
 // joined together and included as additional data to be authenticated"
 func buildAAD(frame []byte, ranges []Range) []byte {
@@ -178,15 +178,15 @@ func buildAAD(frame []byte, ranges []Range) []byte {
 	return aad
 }
 
-// buildInterleaved construye el frame interleaved copiando el frame original
-// y reemplazando las posiciones cifradas (fuera de los rangos unencrypted)
-// con el ciphertext correspondiente.
+// buildInterleaved builds the interleaved frame by copying the original frame
+// and replacing the encrypted positions (outside unencrypted ranges) with the
+// corresponding ciphertext.
 //
-// Diagrama del proceso:
+// Diagram of the process:
 //
-//	Original:  [UUCCCCUUCCCC]  (U=unencrypted, C=cifrar)
-//	Ciphertext:[cccc]           (solo los bytes C concatenados)
-//	Resultado: [UUccccUUccccc]  (ciphertext re-insertado en posiciones C)
+//	Original:  [UUCCCCUUCCCC]  (U=unencrypted, C=to encrypt)
+//	Ciphertext:[cccc]           (just the C bytes concatenated)
+//	Result:    [UUccccUUccccc]  (ciphertext inserted back into C positions)
 func buildInterleaved(original []byte, ranges []Range, ciphertext []byte) []byte {
 	out := make([]byte, len(original))
 	copy(out, original)
@@ -194,7 +194,7 @@ func buildInterleaved(original []byte, ranges []Range, ciphertext []byte) []byte
 	cipherPos := 0
 	last := 0
 	for _, r := range ranges {
-		// Copiar ciphertext en la zona entre el último rango y este rango
+		// Copy ciphertext into the gap between the last range and this one
 		if r.Offset > last {
 			n := r.Offset - last
 			copy(out[last:r.Offset], ciphertext[cipherPos:cipherPos+n])
@@ -202,26 +202,26 @@ func buildInterleaved(original []byte, ranges []Range, ciphertext []byte) []byte
 		}
 		last = r.Offset + r.Length
 	}
-	// Copiar el resto del ciphertext después del último rango
+	// Copy the rest of the ciphertext after the last range
 	if last < len(original) {
 		copy(out[last:], ciphertext[cipherPos:])
 	}
 	return out
 }
 
-// Parse analiza un frame DAVE completo y extrae sus componentes del footer.
+// Parse analyzes a complete DAVE frame and extracts its footer components.
 //
-// El footer se ubica al final del packet y contiene:
+// The footer is located at the end of the packet and contains:
 //  1. Truncated authentication tag (8 bytes)
 //  2. Truncated synchronization nonce (ULEB128 variable)
 //  3. Unencrypted range offset/length pairs (ULEB128 variable)
 //  4. Supplemental data size (1 byte)
 //  5. Magic marker 0xFAFA (2 bytes)
 //
-// El supplemental size indica el tamaño de todo el contenido desde el tag
-// hasta el magic marker inclusive.
+// The supplemental size indicates the size of all content from the tag
+// through the magic marker inclusive.
 //
-// Referencia: protocol.md "Payload Format" diagram
+// Reference: protocol.md "Payload Format" diagram
 func Parse(packet []byte) (*ParsedFrame, error) {
 	if len(packet) < 11 {
 		return nil, fmt.Errorf("packet too short: %w", ErrFrameTooShort)

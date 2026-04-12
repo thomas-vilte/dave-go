@@ -3,7 +3,6 @@ package session
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -143,7 +142,7 @@ func (s *Session) waitForActiveEpoch(timeout time.Duration) error {
 		ready := s.epochReady
 		remaining := time.Until(deadline)
 		if !waitLogged {
-			s.logger.Info("waiting for active epoch", "remaining_ms", remaining.Milliseconds())
+			s.logger.Debug("waiting for active epoch", "remaining_ms", remaining.Milliseconds())
 			waitLogged = true
 		}
 		s.mu.Unlock()
@@ -203,23 +202,7 @@ func (s *Session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 		framePreviewLen = len(encrypted)
 	}
 
-	s.encryptLogs++
-	if s.encryptLogs <= 10 {
-		s.logger.Info("frame encrypted",
-			"packet_index", s.encryptLogs,
-			"ssrc", ssrc,
-			"epoch", s.activeEpoch.id,
-			"nonce", fullNonce,
-			"generation", generation,
-			"truncated_nonce", truncatedNonce,
-			"media_key_prefix", hex.EncodeToString(key[:keyPreviewLen]),
-			"plaintext_size", len(frameData),
-			"encrypted_size", len(encrypted),
-			"encrypted_prefix", hex.EncodeToString(encrypted[:framePreviewLen]),
-		)
-	} else {
-		s.logger.Debug("frame encrypted", "ssrc", ssrc, "epoch", s.activeEpoch.id, "nonce", fullNonce, "generation", generation, "plaintext_size", len(frameData), "encrypted_size", len(encrypted))
-	}
+	s.logger.Debug("frame encrypted", "ssrc", ssrc, "epoch", s.activeEpoch.id, "nonce", fullNonce, "generation", generation, "plaintext_size", len(frameData), "encrypted_size", len(encrypted))
 
 	if cap(encryptedFrame) < len(encrypted) {
 		return 0, fmt.Errorf("encrypted frame buffer too small: need %d, have %d", len(encrypted), cap(encryptedFrame))
@@ -235,6 +218,11 @@ func (s *Session) MaxDecryptedFrameSize(_ godave.UserID, frameSize int) int {
 func (s *Session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame []byte) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if !frame.LooksLikeDAVEFrame(frameData) {
+		n := copy(decryptedFrame, frameData)
+		return n, nil
+	}
 
 	parsed, err := frame.Parse(frameData)
 	if err != nil {
@@ -323,7 +311,7 @@ func (s *Session) OnDaveExecuteTransition(transitionID uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.logger.Info("[DAVE] OnDaveExecuteTransition", "transition_id", transitionID, "pending_epoch_set", s.pendingEpoch != nil)
+	s.logger.Debug("[DAVE] OnDaveExecuteTransition", "transition_id", transitionID, "pending_epoch_set", s.pendingEpoch != nil)
 	s.activeTransitionID = transitionID
 	s.activatePendingEpochLocked()
 	s.pendingTransitionID = 0
@@ -370,14 +358,14 @@ func (s *Session) OnDaveMLSProposals(proposals []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastProposalBatch = append([]byte(nil), proposals...)
-	s.logger.Info("[DAVE] OnDaveMLSProposals", "size", len(proposals), "group_id", fmt.Sprintf("%x", s.groupID), "has_group", len(s.groupID) > 0)
+	s.logger.Debug("[DAVE] OnDaveMLSProposals", "size", len(proposals), "group_id", fmt.Sprintf("%x", s.groupID), "has_group", len(s.groupID) > 0)
 
 	// If a pendingEpoch is already waiting for ExecuteTransition, queue this
 	// batch instead of committing immediately. Committing again would advance
 	// the local group state past what Discord DS has accepted, causing the
 	// intermediate epoch to be overwritten and audio keys to diverge.
 	if s.pendingEpoch != nil {
-		s.logger.Info("[DAVE] OnDaveMLSProposals: pendingEpoch in flight, queuing proposals", "queue_len", len(s.proposalQueue)+1)
+		s.logger.Debug("[DAVE] OnDaveMLSProposals: pendingEpoch in flight, queuing proposals", "queue_len", len(s.proposalQueue)+1)
 		s.proposalQueue = append(s.proposalQueue, append([]byte(nil), proposals...))
 		return
 	}
@@ -416,7 +404,7 @@ func (s *Session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMe
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.logger.Info("[DAVE] OnDaveMLSPrepareCommitTransition", "transition_id", transitionID, "commit_size", len(commitMessage), "pending_epoch_set", s.pendingEpoch != nil, "commit_hex_prefix", fmt.Sprintf("%x", commitMessage[:minInt(32, len(commitMessage))]))
+	s.logger.Debug("[DAVE] OnDaveMLSPrepareCommitTransition", "transition_id", transitionID, "commit_size", len(commitMessage), "pending_epoch_set", s.pendingEpoch != nil, "commit_hex_prefix", fmt.Sprintf("%x", commitMessage[:minInt(32, len(commitMessage))]))
 	s.pendingTransitionID = transitionID
 	if err := s.ensureMLSClientLocked(); err != nil {
 		s.logger.Error("failed to init mls client", "error", err)
@@ -437,7 +425,7 @@ func (s *Session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMe
 	} else {
 		if s.pendingEpoch != nil {
 			// Our commit lost; restore pre-commit state before processing the winner.
-			s.logger.Info("[DAVE] OnDaveMLSPrepareCommitTransition: competing commit won, rolling back",
+			s.logger.Debug("[DAVE] OnDaveMLSPrepareCommitTransition: competing commit won, rolling back",
 				"transition_id", transitionID,
 				"our_commit_size", len(s.pendingCommitBytes),
 				"winning_commit_size", len(commitMessage))
@@ -465,7 +453,7 @@ func (s *Session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMe
 	}
 
 	if transitionID == 0 {
-		s.logger.Info("[DAVE] activating epoch immediately for initial transition (transitionID=0)")
+		s.logger.Debug("[DAVE] activating epoch immediately for initial transition (transitionID=0)")
 		s.activeTransitionID = 0
 		s.activatePendingEpochLocked()
 		s.pendingTransitionID = 0
@@ -476,7 +464,7 @@ func (s *Session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.logger.Info("[DAVE] OnDaveMLSWelcome", "transition_id", transitionID, "welcome_size", len(welcomeMessage))
+	s.logger.Debug("[DAVE] OnDaveMLSWelcome", "transition_id", transitionID, "welcome_size", len(welcomeMessage))
 	s.pendingTransitionID = transitionID
 
 	// If we have a pending epoch it means we previously committed. A Welcome
@@ -484,7 +472,7 @@ func (s *Session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
 	// commit was rejected. Roll back our local state to the pre-commit snapshot
 	// so that joinPendingWelcomeLocked operates from the correct epoch.
 	if s.pendingEpoch != nil {
-		s.logger.Info("[DAVE] OnDaveMLSWelcome: our commit was rejected by DS (Welcome received), rolling back",
+		s.logger.Debug("[DAVE] OnDaveMLSWelcome: our commit was rejected by DS (Welcome received), rolling back",
 			"transition_id", transitionID)
 		if err := s.restorePreCommitStateLocked(); err != nil {
 			s.logger.Error("failed to restore pre-commit state on Welcome", "transition_id", transitionID, "error", err)
@@ -510,7 +498,7 @@ func (s *Session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
 		}
 		return
 	}
-	s.logger.Info("[DAVE] OnDaveMLSWelcome: joined successfully", "pending_epoch_set", s.pendingEpoch != nil, "pending_epoch_id", func() uint64 {
+	s.logger.Debug("[DAVE] OnDaveMLSWelcome: joined successfully", "pending_epoch_set", s.pendingEpoch != nil, "pending_epoch_id", func() uint64 {
 		if s.pendingEpoch != nil {
 			return s.pendingEpoch.id
 		}
@@ -524,7 +512,7 @@ func (s *Session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
 	}
 
 	if transitionID == 0 {
-		s.logger.Info("[DAVE] activating epoch immediately from welcome (transitionID=0)")
+		s.logger.Debug("[DAVE] activating epoch immediately from welcome (transitionID=0)")
 		s.activeTransitionID = 0
 		s.activatePendingEpochLocked()
 		s.pendingTransitionID = 0

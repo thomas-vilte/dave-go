@@ -161,7 +161,12 @@ func TestEncryptNoActiveEpoch(t *testing.T) {
 func TestDecryptNoActiveEpoch(t *testing.T) {
 	s := NewSession(nil, "test_user", testCallbacks{})
 
-	_, err := s.Decrypt("user1", []byte{0x00}, make([]byte, 256))
+	// Use a frame that passes LooksLikeDAVEFrame so the epoch check is reached.
+	// 11 bytes minimum with 0xFA 0xFA magic marker at the end.
+	fakeDAVEFrame := make([]byte, 11)
+	fakeDAVEFrame[9] = 0xFA
+	fakeDAVEFrame[10] = 0xFA
+	_, err := s.Decrypt("user1", fakeDAVEFrame, make([]byte, 256))
 	if err == nil {
 		t.Fatal("expected error when decrypting with no epoch")
 	}

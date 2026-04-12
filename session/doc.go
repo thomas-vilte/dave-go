@@ -1,38 +1,40 @@
-// Package session implementa la sesión DAVE drop-in replacement de godave.Session.
+// Package session implements a DAVE session as a drop-in replacement for
+// godave.Session.
 //
-// Es el punto de integración entre disgo-fork/voice y las capas criptográficas DAVE:
+// It is the integration point between the voice layer and the DAVE crypto
+// packages:
 //
-//	disgo-fork/voice
-//	  └── godave.Session (interfaz)
-//	        └── dave/session (implementación)
-//	              ├── dave/mediakeys  → derivación de sender keys por epoch
-//	              ├── dave/codecs     → cifrado codec-aware (OPUS, VP8, H26x, AV1)
-//	              └── dave/frame      → formato de frame DAVE encrypt/decrypt
+//	voice
+//	  └── godave.Session (interface)
+//	        └── dave-go/session (implementation)
+//	              ├── dave-go/mediakeys  -> per-epoch sender key derivation
+//	              ├── dave-go/codecs     -> codec-aware encryption (OPUS, VP8, H26x, AV1)
+//	              └── dave-go/frame      -> DAVE frame encrypt/decrypt format
 //
-// Máquina de estados DAVE:
+// DAVE state machine:
 //
 //	idle ──[OnSelectProtocolAck]──► protocol_ready
 //	  │
 //	  ├──[OnDavePrepareEpoch(epoch=1)]──► new_group
-//	  │       └── enviar KeyPackage
+//	  │       └── send KeyPackage
 //	  │
 //	  ├──[OnDavePrepareTransition]──► prepare_transition
-//	  │       └── procesar commit/welcome → pendingEpoch
+//	  │       └── process commit/welcome -> pendingEpoch
 //	  │
 //	  └──[OnDaveExecuteTransition]──► active
-//	          └── swap pendingEpoch → activeEpoch
+//	          └── swap pendingEpoch -> activeEpoch
 //
-// Data path (envío):
+// Send path:
 //
 //	frame OPUS → codecs.Encrypt(OPUS, frame, key, nonce) → frame DAVE
-//	  donde: key = ratchet.GetKey(generation), nonce = sendCounter.Next()
+//	  where: key = ratchet.GetKey(generation), nonce = sendCounter.Next()
 //
-// Data path (recepción):
+// Receive path:
 //
 //	frame DAVE → frame.Decrypt → OPUS plaintext
-//	  donde: key = activeEpoch.senders[userID].ratchet.GetKey(generation)
+//	  where: key = activeEpoch.senders[userID].ratchet.GetKey(generation)
 //
-// Referencias:
+// References:
 //   - protocol.md "Sender Key Derivation"
 //   - protocol.md "Key Rotation"
 //   - protocol.md "Encoded Frame Transforms"

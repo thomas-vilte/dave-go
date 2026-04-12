@@ -1,14 +1,14 @@
-// Implementación de AES-128-GCM con tag truncado a 64 bits (8 bytes).
+// AES-128-GCM with a tag truncated to 64 bits (8 bytes).
 //
-// Go estándar solo permite tags de 12-16 bytes vía cipher.NewGCMWithTagSize.
-// DAVE requiere tags de 8 bytes según protocol.md "Truncated authentication tag":
+// Go's standard library only supports 12-16 byte tags via cipher.NewGCMWithTagSize.
+// DAVE requires 8-byte tags per protocol.md "Truncated authentication tag":
 // "AES128-GCM authentication tags are truncated to 64-bits"
 //
-// Estrategia: usar cipher.NewGCM estándar internamente y truncar el tag a 8 bytes.
-// Para Open: desencriptar primero (XOR con keystream) y luego verificar el tag
-// re-encriptando el plaintext resultante.
+// Strategy: use the standard cipher.NewGCM internally and truncate the tag to 8 bytes.
+// For Open: decrypt first (XOR with keystream) then verify the tag by re-encrypting
+// the resulting plaintext.
 //
-// Cumple con NIST SP 800-38D Appendix C para tags de 64 bits.
+// Complies with NIST SP 800-38D Appendix C for 64-bit tags.
 package frame
 
 import (
@@ -17,7 +17,7 @@ import (
 	"fmt"
 )
 
-// newGCM8 crea una instancia de AES-128-GCM con tag truncado a 8 bytes.
+// newGCM8 creates an AES-128-GCM instance with the tag truncated to 8 bytes.
 func newGCM8(key []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -30,7 +30,7 @@ func newGCM8(key []byte) (cipher.AEAD, error) {
 	return &gcm8{inner: inner}, nil
 }
 
-// gcm8 implementa cipher.AEAD con tag de 8 bytes.
+// gcm8 implements cipher.AEAD with an 8-byte tag.
 type gcm8 struct {
 	inner cipher.AEAD
 }
@@ -38,21 +38,21 @@ type gcm8 struct {
 func (g *gcm8) NonceSize() int { return g.inner.NonceSize() }
 func (g *gcm8) Overhead() int  { return 8 }
 
-// Seal cifra y autentica el plaintext, retornando ciphertext + tag(8 bytes).
+// Seal encrypts and authenticates the plaintext, returning ciphertext + tag(8 bytes).
 func (g *gcm8) Seal(dst, nonce, plaintext, aad []byte) []byte {
 	sealed := g.inner.Seal(dst, nonce, plaintext, aad)
 	// sealed = dst + ciphertext + tag(16 bytes)
-	// Truncar tag a 8 bytes
+	// Truncate tag to 8 bytes
 	tagStart := len(sealed) - 16
 	return append(sealed[:tagStart], sealed[tagStart:tagStart+8]...)
 }
 
-// Open verifica el tag truncado (8 bytes) y descifra el ciphertext.
+// Open verifies the truncated tag (8 bytes) and decrypts the ciphertext.
 //
-// Proceso:
-//  1. Extraer ciphertext y tag truncado
-//  2. Desencriptar usando keystream (GCM con plaintext de ceros)
-//  3. Verificar el tag re-encriptando el plaintext y comparando
+// Process:
+//  1. Extract ciphertext and truncated tag
+//  2. Decrypt using keystream (GCM with zero plaintext)
+//  3. Verify the tag by re-encrypting the plaintext and comparing
 func (g *gcm8) Open(dst, nonce, ciphertext, aad []byte) ([]byte, error) {
 	if len(ciphertext) < 8 {
 		return nil, ErrAuthTagMismatch
@@ -80,7 +80,7 @@ func (g *gcm8) Open(dst, nonce, ciphertext, aad []byte) ([]byte, error) {
 	return append(dst, plaintext...), nil
 }
 
-// constantTimeEqual compara dos slices de bytes en tiempo constante.
+// constantTimeEqual compares two byte slices in constant time.
 func constantTimeEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false

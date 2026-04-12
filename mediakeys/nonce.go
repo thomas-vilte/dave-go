@@ -39,9 +39,9 @@ func NewNonceExpander() *NonceExpander {
 	return &NonceExpander{}
 }
 
-// Expand extiende el nonce truncado de 32 bits a un contador de 64 bits.
-// Usa la misma idea que un extensor de secuencia RTP: elige el ciclo 2^32 más
-// cercano al máximo observado para tolerar reordering chico y detectar wraparound.
+// Expand extends the truncated 32-bit nonce to a 64-bit counter.
+// Uses the same idea as an RTP sequence number extender: picks the 2^32 cycle
+// closest to the highest seen value to tolerate small reordering and detect wraparound.
 func (e *NonceExpander) Expand(truncated uint32) uint64 {
 	if !e.initialized {
 		full := uint64(truncated)

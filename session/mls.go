@@ -66,7 +66,7 @@ func (e exporterAdapter) Export(label string, ctx []byte, length int) ([]byte, e
 		exportPrefixLen = len(discordExport)
 	}
 
-	slog.Default().Info("[DAVE] exporter derivation",
+	slog.Default().Debug("[DAVE] exporter derivation",
 		"group_id", fmt.Sprintf("%x", e.groupID),
 		"label", label,
 		"context_prefix", hex.EncodeToString(ctx[:minInt(len(ctx), 8)]),
@@ -245,7 +245,7 @@ func (s *Session) processProposalBatchLocked(proposals []byte) error {
 	}
 
 	operationType := proposals[0]
-	s.logger.Info("[DAVE] processProposalBatchLocked", "operation_type", operationType, "total_size", len(proposals))
+	s.logger.Debug("[DAVE] processProposalBatchLocked", "operation_type", operationType, "total_size", len(proposals))
 	if operationType != 0 {
 		// revoke: not yet handled — ignore safely
 		s.logger.Debug("[DAVE] processProposalBatchLocked: revoke operation, ignoring")
@@ -264,7 +264,7 @@ func (s *Session) processProposalBatchLocked(proposals []byte) error {
 		return fmt.Errorf("proposals vector truncated: need %d bytes, have %d", end, len(payload))
 	}
 
-	s.logger.Info("[DAVE] proposals vector parsed",
+	s.logger.Debug("[DAVE] proposals vector parsed",
 		"vec_len", vecLen,
 		"header_size", headerSize,
 		"payload_first_32", fmt.Sprintf("%x", payload[:minInt(32, len(payload))]),
@@ -276,7 +276,7 @@ func (s *Session) processProposalBatchLocked(proposals []byte) error {
 			return fmt.Errorf("proposal too short: %d bytes", len(remaining))
 		}
 		wireOriginal := remaining
-		s.logger.Info("[DAVE] parsing proposal", "index", i, "remaining_bytes", len(remaining), "wire_hex", fmt.Sprintf("%x", remaining[:minInt(64, len(remaining))]))
+		s.logger.Debug("[DAVE] parsing proposal", "index", i, "remaining_bytes", len(remaining), "wire_hex", fmt.Sprintf("%x", remaining[:minInt(64, len(remaining))]))
 
 		msg, err := framing.UnmarshalMLSMessage(remaining)
 		if err != nil {
@@ -295,7 +295,7 @@ func (s *Session) processProposalBatchLocked(proposals []byte) error {
 		remaining = remaining[len(wire):]
 	}
 
-	s.logger.Info("[DAVE] processProposalBatchLocked: all proposals processed successfully")
+	s.logger.Debug("[DAVE] processProposalBatchLocked: all proposals processed successfully")
 	return nil
 }
 
@@ -346,7 +346,7 @@ func (s *Session) rebuildEpochStateLocked(groupID []byte) (*epochState, error) {
 			generationZeroPreviewLen = len(generationZeroKey)
 		}
 
-		s.logger.Info("[DAVE] sender key material derived",
+		s.logger.Debug("[DAVE] sender key material derived",
 			"epoch_id", epochID,
 			"member_user_id", memberUserID,
 			"sender_id", senderID,
@@ -371,7 +371,7 @@ func minInt(a, b int) int {
 }
 
 func (s *Session) activatePendingEpochLocked() {
-	s.logger.Info("[DAVE] activatePendingEpochLocked called", "pending_epoch_set", s.pendingEpoch != nil, "active_epoch_set", s.activeEpoch != nil, "user_id", s.userID)
+	s.logger.Debug("[DAVE] activatePendingEpochLocked called", "pending_epoch_set", s.pendingEpoch != nil, "active_epoch_set", s.activeEpoch != nil, "user_id", s.userID)
 	if s.pendingEpoch == nil {
 		s.logger.Warn("[DAVE] activatePendingEpochLocked: pendingEpoch is nil, no-op")
 		return
@@ -380,7 +380,7 @@ func (s *Session) activatePendingEpochLocked() {
 	if s.activeEpoch != nil {
 		s.activeEpoch.expiresAt = time.Now().Add(epochRetention)
 		s.retainedEpoch = append(s.retainedEpoch, s.activeEpoch)
-		s.logger.Info("[DAVE] activatePendingEpochLocked: retained previous active epoch", "old_epoch_id", s.activeEpoch.id)
+		s.logger.Debug("[DAVE] activatePendingEpochLocked: retained previous active epoch", "old_epoch_id", s.activeEpoch.id)
 	}
 
 	s.activeEpoch = s.pendingEpoch
@@ -392,7 +392,7 @@ func (s *Session) activatePendingEpochLocked() {
 	if sender := s.activeEpoch.senders[s.userID]; sender != nil {
 		s.sendRatchet = sender.ratchet
 		s.signalEpochReadyLocked()
-		s.logger.Info("[DAVE] activatePendingEpochLocked: epoch activated", "epoch_id", s.activeEpoch.id, "sender_count", len(s.activeEpoch.senders), "send_ratchet_set", true)
+		s.logger.Debug("[DAVE] activatePendingEpochLocked: epoch activated", "epoch_id", s.activeEpoch.id, "sender_count", len(s.activeEpoch.senders), "send_ratchet_set", true)
 	} else {
 		s.sendRatchet = nil
 		s.logger.Warn("[DAVE] activatePendingEpochLocked: epoch activated but NO send ratchet (self not in senders map)", "epoch_id", s.activeEpoch.id, "sender_count", len(s.activeEpoch.senders))
@@ -410,7 +410,7 @@ func (s *Session) drainProposalQueueLocked() {
 	for len(s.proposalQueue) > 0 && s.pendingEpoch == nil {
 		next := s.proposalQueue[0]
 		s.proposalQueue = s.proposalQueue[1:]
-		s.logger.Info("[DAVE] draining queued proposal batch", "size", len(next), "remaining_queue", len(s.proposalQueue))
+		s.logger.Debug("[DAVE] draining queued proposal batch", "size", len(next), "remaining_queue", len(s.proposalQueue))
 		s.processAndCommitProposalBatchLocked(next)
 	}
 }
@@ -483,7 +483,7 @@ func (s *Session) restorePreCommitStateLocked() error {
 }
 
 func (s *Session) commitProposalsLocked() error {
-	s.logger.Info("[DAVE] commitProposalsLocked: starting commit", "group_id", fmt.Sprintf("%x", s.groupID))
+	s.logger.Debug("[DAVE] commitProposalsLocked: starting commit", "group_id", fmt.Sprintf("%x", s.groupID))
 
 	// Snapshot the pre-commit group state. If Discord DS accepts a competing
 	// commit instead of ours, we restore this snapshot so processCommitLocked
@@ -510,8 +510,8 @@ func (s *Session) commitProposalsLocked() error {
 		return fmt.Errorf("commit pending proposals: %w", err)
 	}
 
-	s.logger.Info("[DAVE] commitProposalsLocked: commit created", "commit_size", len(commit), "welcome_size", len(welcome))
-	s.logger.Info("[DAVE] commitProposalsLocked: commit hex", "commit_hex", fmt.Sprintf("%x", commit))
+	s.logger.Debug("[DAVE] commitProposalsLocked: commit created", "commit_size", len(commit), "welcome_size", len(welcome))
+	s.logger.Debug("[DAVE] commitProposalsLocked: commit hex", "commit_hex", fmt.Sprintf("%x", commit))
 
 	// CommitPendingProposals advances the local epoch immediately (MergeCommit).
 	// Pre-populate pendingEpoch so that when op 29 arrives (gateway echoes the commit
@@ -527,7 +527,7 @@ func (s *Session) commitProposalsLocked() error {
 	s.pendingEpoch = epochState
 	s.pendingGroupID = append([]byte(nil), s.groupID...)
 
-	s.logger.Info("[DAVE] commitProposalsLocked: pendingEpoch set", "epoch_id", epochState.id, "sender_count", len(epochState.senders), "has_self", func() bool { _, ok := epochState.senders[s.userID]; return ok }())
+	s.logger.Debug("[DAVE] commitProposalsLocked: pendingEpoch set", "epoch_id", epochState.id, "sender_count", len(epochState.senders), "has_self", func() bool { _, ok := epochState.senders[s.userID]; return ok }())
 
 	// DAVE opcode 28 spec v1.1.2:
 	// MLSMessage(commit) || Welcome(struct)
@@ -547,9 +547,9 @@ func (s *Session) commitProposalsLocked() error {
 	}
 
 	if s.callbacks == nil {
-		s.logger.Info("[DAVE] commitProposalsLocked: no callbacks, skipping send")
+		s.logger.Debug("[DAVE] commitProposalsLocked: no callbacks, skipping send")
 		return nil
 	}
-	s.logger.Info("[DAVE] commitProposalsLocked: sending commit/welcome to gateway", "payload_size", len(payload))
+	s.logger.Debug("[DAVE] commitProposalsLocked: sending commit/welcome to gateway", "payload_size", len(payload))
 	return s.callbacks.SendMLSCommitWelcome(payload)
 }
