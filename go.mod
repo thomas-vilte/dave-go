@@ -1,10 +1,10 @@
 module github.com/thomas-vilte/dave-go
 
-go 1.26.1
+go 1.26.0
 
 require (
 	github.com/disgoorg/godave v0.1.0
-	github.com/thomas-vilte/mls-go v1.2.0
+	github.com/thomas-vilte/mls-go v1.2.1
 )
 
 require (
