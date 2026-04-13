@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"github.com/disgoorg/godave"
-	"github.com/thomas-vilte/dave-go/mediakeys"
 	"github.com/thomas-vilte/mls-go"
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/group"
 	"github.com/thomas-vilte/mls-go/keypackages"
 	memorystore "github.com/thomas-vilte/mls-go/storage/memory"
+
+	"github.com/thomas-vilte/dave-go/mediakeys"
 )
 
 const epochRetention = 10 * time.Second
@@ -100,7 +101,7 @@ func identityBytesToUserID(identity []byte) (godave.UserID, uint64, error) {
 	return godave.UserID(strconv.FormatUint(n, 10)), n, nil
 }
 
-func (s *Session) ensureMLSClientLocked() error {
+func (s *session) ensureMLSClientLocked() error {
 	if s.mlsClient != nil {
 		return nil
 	}
@@ -125,7 +126,7 @@ func (s *Session) ensureMLSClientLocked() error {
 	return nil
 }
 
-func (s *Session) ensurePendingKeyPackageLocked() error {
+func (s *session) ensurePendingKeyPackageLocked() error {
 	if err := s.ensureMLSClientLocked(); err != nil {
 		return err
 	}
@@ -152,7 +153,7 @@ func (s *Session) ensurePendingKeyPackageLocked() error {
 	return nil
 }
 
-func (s *Session) joinPendingWelcomeLocked(welcome []byte) error {
+func (s *session) joinPendingWelcomeLocked(welcome []byte) error {
 	groupID, err := s.mlsClient.client.JoinGroup(context.Background(), welcome)
 	if err != nil {
 		return fmt.Errorf("join group from welcome: %w", err)
@@ -171,7 +172,7 @@ func (s *Session) joinPendingWelcomeLocked(welcome []byte) error {
 	return nil
 }
 
-func (s *Session) processCommitLocked(commit []byte) error {
+func (s *session) processCommitLocked(commit []byte) error {
 	if len(s.groupID) == 0 {
 		return fmt.Errorf("no active group for commit")
 	}
@@ -226,7 +227,7 @@ func readTLSVectorLength(data []byte) (uint32, int, error) {
 	}
 }
 
-func (s *Session) processProposalBatchLocked(proposals []byte) error {
+func (s *session) processProposalBatchLocked(proposals []byte) error {
 	if len(proposals) == 0 {
 		s.logger.Debug("[DAVE] processProposalBatchLocked: empty proposals")
 		return nil
@@ -299,7 +300,7 @@ func (s *Session) processProposalBatchLocked(proposals []byte) error {
 	return nil
 }
 
-func (s *Session) rebuildEpochStateLocked(groupID []byte) (*epochState, error) {
+func (s *session) rebuildEpochStateLocked(groupID []byte) (*epochState, error) {
 	members, err := s.mlsClient.client.ListMembers(context.Background(), groupID)
 	if err != nil {
 		return nil, fmt.Errorf("list members: %w", err)
@@ -370,7 +371,7 @@ func minInt(a, b int) int {
 	return b
 }
 
-func (s *Session) activatePendingEpochLocked() {
+func (s *session) activatePendingEpochLocked() {
 	s.logger.Debug("[DAVE] activatePendingEpochLocked called", "pending_epoch_set", s.pendingEpoch != nil, "active_epoch_set", s.activeEpoch != nil, "user_id", s.userID)
 	if s.pendingEpoch == nil {
 		s.logger.Warn("[DAVE] activatePendingEpochLocked: pendingEpoch is nil, no-op")
@@ -406,7 +407,7 @@ func (s *Session) activatePendingEpochLocked() {
 	s.drainProposalQueueLocked()
 }
 
-func (s *Session) drainProposalQueueLocked() {
+func (s *session) drainProposalQueueLocked() {
 	for len(s.proposalQueue) > 0 && s.pendingEpoch == nil {
 		next := s.proposalQueue[0]
 		s.proposalQueue = s.proposalQueue[1:]
@@ -415,7 +416,7 @@ func (s *Session) drainProposalQueueLocked() {
 	}
 }
 
-func (s *Session) pruneRetainedEpochsLocked() {
+func (s *session) pruneRetainedEpochsLocked() {
 	now := time.Now()
 	dst := s.retainedEpoch[:0]
 	for _, epoch := range s.retainedEpoch {
@@ -429,7 +430,7 @@ func (s *Session) pruneRetainedEpochsLocked() {
 	s.retainedEpoch = dst
 }
 
-func (s *Session) createGroupWithExternalSenderLocked() error {
+func (s *session) createGroupWithExternalSenderLocked() error {
 	if len(s.groupID) > 0 {
 		return nil // group already created
 	}
@@ -467,7 +468,7 @@ func (s *Session) createGroupWithExternalSenderLocked() error {
 // just before the last commit. Called when Discord DS echoes a different commit
 // (i.e. another member's commit won) so that processCommitLocked can apply the
 // winning commit from the correct base epoch. Must be called with s.mu held.
-func (s *Session) restorePreCommitStateLocked() error {
+func (s *session) restorePreCommitStateLocked() error {
 	if len(s.preCommitGroupState) == 0 {
 		return fmt.Errorf("no pre-commit state to restore")
 	}
@@ -482,7 +483,7 @@ func (s *Session) restorePreCommitStateLocked() error {
 	return nil
 }
 
-func (s *Session) commitProposalsLocked() error {
+func (s *session) commitProposalsLocked() error {
 	s.logger.Debug("[DAVE] commitProposalsLocked: starting commit", "group_id", fmt.Sprintf("%x", s.groupID))
 
 	// Snapshot the pre-commit group state. If Discord DS accepts a competing

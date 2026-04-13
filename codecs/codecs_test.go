@@ -111,7 +111,7 @@ func TestEncryptH26xNonceIncrementOnCollision(t *testing.T) {
 
 // buildOBU builds an AV1 OBU with the given fields.
 func buildOBU(obuType byte, hasExt bool, hasSize bool, payload []byte) []byte {
-	header := (obuType << 3)
+	header := obuType << 3
 	if hasExt {
 		header |= 0x04
 	}
@@ -231,9 +231,9 @@ func TestPrepareAV1FrameLastOBUSizeFieldRemoved(t *testing.T) {
 func TestPrepareAV1FrameDropsPadding(t *testing.T) {
 	padding := buildOBU(obuPadding, false, true, []byte{0x00, 0x00})
 	tileList := buildOBU(obuTileList, false, true, []byte{0xFF})
-	real := buildOBU(6, false, true, []byte{0x42, 0x43, 0x44})
+	obu := buildOBU(6, false, true, []byte{0x42, 0x43, 0x44})
 
-	payload := append(append(padding, tileList...), real...)
+	payload := append(append(padding, tileList...), obu...)
 	transformed, _, err := prepareAV1Frame(payload)
 	if err != nil {
 		t.Fatalf("error: %v", err)

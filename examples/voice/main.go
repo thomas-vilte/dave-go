@@ -16,6 +16,7 @@ import (
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
+
 	"github.com/thomas-vilte/dave-go/session"
 )
 
@@ -49,7 +50,7 @@ func main() {
 			go play(e.Client())
 		}),
 		bot.WithVoiceManagerConfigOpts(
-			voice.WithDaveSessionCreateFunc(session.NewSession),
+			voice.WithDaveSessionCreateFunc(session.New),
 		),
 	)
 	if err != nil {
@@ -109,7 +110,9 @@ func writeOpus(w io.Writer) {
 	if err != nil {
 		panic("error opening file: " + err.Error())
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()

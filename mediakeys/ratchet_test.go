@@ -2,6 +2,7 @@ package mediakeys
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 	"time"
 )
@@ -79,14 +80,14 @@ func TestKeyRatchetExpiresOldGeneration(t *testing.T) {
 	now = now.Add(11 * time.Second)
 	r.PruneExpired()
 
-	if _, err := r.GetKey(0); err != ErrGenerationExpired {
+	if _, err := r.GetKey(0); !errors.Is(err, ErrGenerationExpired) {
 		t.Fatalf("expected ErrGenerationExpired, got %v", err)
 	}
 }
 
 func TestKeyRatchetInvalidBaseSecret(t *testing.T) {
 	_, err := NewKeyRatchet([]byte{0x01})
-	if err != ErrInvalidBaseSecret {
+	if !errors.Is(err, ErrInvalidBaseSecret) {
 		t.Fatalf("expected ErrInvalidBaseSecret, got %v", err)
 	}
 }

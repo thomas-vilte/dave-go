@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
+	"errors"
 	"testing"
 )
 
@@ -268,7 +269,7 @@ func TestEncryptInvalidKey(t *testing.T) {
 		Plaintext: []byte("test"),
 		Key:       []byte("short"),
 	})
-	if err != ErrInvalidKeyLength {
+	if !errors.Is(err, ErrInvalidKeyLength) {
 		t.Errorf("got err=%v, want %v", err, ErrInvalidKeyLength)
 	}
 }
@@ -280,7 +281,7 @@ func TestEncryptInvalidRanges(t *testing.T) {
 		Key:               key,
 		UnencryptedRanges: []Range{{10, 5}},
 	})
-	if err != ErrInvalidRanges {
+	if !errors.Is(err, ErrInvalidRanges) {
 		t.Errorf("got err=%v, want %v", err, ErrInvalidRanges)
 	}
 }
@@ -363,7 +364,7 @@ func TestParseTooShort(t *testing.T) {
 
 func TestParseInvalidMagic(t *testing.T) {
 	_, err := Parse([]byte("hello world"))
-	if err != ErrInvalidMagicMarker {
+	if !errors.Is(err, ErrInvalidMagicMarker) {
 		t.Errorf("got err=%v, want %v", err, ErrInvalidMagicMarker)
 	}
 }
