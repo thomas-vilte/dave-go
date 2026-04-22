@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"crypto/cipher"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -39,6 +40,11 @@ type session struct {
 
 	sendCounter *mediakeys.NonceCounter
 	sendRatchet *mediakeys.KeyRatchet
+
+	// sendCipher caches the AES-GCM cipher to avoid recreating it on every frame.
+	// Invalidated when the ratchet key changes (~every 16 frames per DAVE spec).
+	sendCipher    cipher.AEAD
+	sendCipherKey []byte // copy of the key used to create sendCipher
 
 	mlsClient *mlsClientWrapper
 
@@ -189,18 +195,28 @@ func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 	if err != nil {
 		return 0, err
 	}
-	keyPreviewLen := 8
-	if len(key) < keyPreviewLen {
-		keyPreviewLen = len(key)
+
+	// Reuse the AES-GCM cipher if the key hasn't changed (hot path: same generation).
+	// The ratchet key changes every ~16 frames; recreation is infrequent.
+	if !bytes.Equal(s.sendCipherKey, key) {
+		newCipher, err := frame.NewGCM8(key)
+		if err != nil {
+			return 0, fmt.Errorf("cipher creation: %w", err)
+		}
+		s.sendCipher = newCipher
+		s.sendCipherKey = append(s.sendCipherKey[:0], key...)
 	}
 
-	encrypted, err := codecs.Encrypt(kind, frameData, key, truncatedNonce)
+	// H264/H265 may need to retry with nonce+1 if the output contains start code sequences.
+	// That path reconstructs the cipher internally, so fall back to Encrypt for those codecs.
+	var encrypted []byte
+	if kind == codecs.CodecH264 || kind == codecs.CodecH265 {
+		encrypted, err = codecs.Encrypt(kind, frameData, key, truncatedNonce)
+	} else {
+		encrypted, err = codecs.EncryptWithCipher(kind, frameData, s.sendCipher, truncatedNonce)
+	}
 	if err != nil {
 		return 0, err
-	}
-	framePreviewLen := 24
-	if len(encrypted) < framePreviewLen {
-		framePreviewLen = len(encrypted)
 	}
 
 	s.logger.Debug("frame encrypted", "ssrc", ssrc, "epoch", s.activeEpoch.id, "nonce", fullNonce, "generation", generation, "plaintext_size", len(frameData), "encrypted_size", len(encrypted))

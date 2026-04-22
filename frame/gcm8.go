@@ -17,6 +17,12 @@ import (
 	"fmt"
 )
 
+// NewGCM8 creates an AES-128-GCM instance with the tag truncated to 8 bytes.
+// Exported so callers can cache the cipher and avoid recreating it on every frame.
+func NewGCM8(key []byte) (cipher.AEAD, error) {
+	return newGCM8(key)
+}
+
 // newGCM8 creates an AES-128-GCM instance with the tag truncated to 8 bytes.
 func newGCM8(key []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key)
@@ -61,7 +67,7 @@ func (g *gcm8) Open(dst, nonce, ciphertext, aad []byte) ([]byte, error) {
 	data := ciphertext[:len(ciphertext)-8]
 	receivedTag := ciphertext[len(ciphertext)-8:]
 
-	// Desencriptar: keystream = Seal(nonce, zeros, aad)
+	// Decrypt: keystream = Seal(nonce, zeros, aad)
 	keystream := g.inner.Seal(nil, nonce, make([]byte, len(data)), aad)
 	keystream = keystream[:len(data)]
 
@@ -70,7 +76,7 @@ func (g *gcm8) Open(dst, nonce, ciphertext, aad []byte) ([]byte, error) {
 		plaintext[i] = data[i] ^ keystream[i]
 	}
 
-	// Verificar tag: re-encriptar el plaintext y comparar los primeros 8 bytes
+	// Verify tag: re-encrypt the plaintext and compare the first 8 bytes
 	fullSealed := g.inner.Seal(nil, nonce, plaintext, aad)
 	fullTag := fullSealed[len(fullSealed)-16:]
 	if !constantTimeEqual(receivedTag, fullTag[:8]) {

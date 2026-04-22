@@ -12,7 +12,11 @@
 // unencrypted"
 package codecs
 
-import "github.com/thomas-vilte/dave-go/frame"
+import (
+	"crypto/cipher"
+
+	"github.com/thomas-vilte/dave-go/frame"
+)
 
 // Kind identifies the codec of a media frame.
 type Kind uint8
@@ -61,6 +65,36 @@ func Encrypt(kind Kind, plaintext, key []byte, nonce uint32) ([]byte, error) {
 		return frame.Encrypt(frame.EncryptParams{
 			Plaintext:         plaintext,
 			Key:               key,
+			TruncatedNonce:    nonce,
+			UnencryptedRanges: ranges,
+		})
+	}
+}
+
+// EncryptWithCipher encrypts a frame using a pre-created cipher (avoids recreating AES per frame).
+// Use when the caller already has the cipher cached (e.g. session.Encrypt with cached cipher).
+// H264/H265 with start-code retry falls back to Encrypt (requires the key to retry with nonce+1).
+func EncryptWithCipher(kind Kind, plaintext []byte, gcm cipher.AEAD, nonce uint32) ([]byte, error) {
+	switch kind {
+	case CodecAV1:
+		transformed, ranges, err := prepareAV1Frame(plaintext)
+		if err != nil {
+			return nil, err
+		}
+		return frame.EncryptWithCipher(frame.EncryptWithCipherParams{
+			Plaintext:         transformed,
+			Cipher:            gcm,
+			TruncatedNonce:    nonce,
+			UnencryptedRanges: ranges,
+		})
+	default:
+		ranges, err := UnencryptedRanges(kind, plaintext)
+		if err != nil {
+			return nil, err
+		}
+		return frame.EncryptWithCipher(frame.EncryptWithCipherParams{
+			Plaintext:         plaintext,
+			Cipher:            gcm,
 			TruncatedNonce:    nonce,
 			UnencryptedRanges: ranges,
 		})
