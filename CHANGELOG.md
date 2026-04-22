@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v0.2.0] - 2026-04-22
+
+[v0.2.0]: https://github.com/thomas-vilte/dave-go/compare/v0.1.0...v0.2.0
+
+In this update, we focused on enhancing the efficiency of our core encryption engine. We introduced significant performance optimizations to frame processing to ensure faster data handling and reduced system overhead.
+
+### 🚀 Performance
+
+- We optimized frame encryption by implementing cipher caching and a dedicated fast path to significantly improve processing speed.
+
 ## [v0.1.0] - 2026-04-15
 
 [v0.1.0]: https://github.com/thomas-vilte/dave-go/compare/v0.0.0...v0.1.0
