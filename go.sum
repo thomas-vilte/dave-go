@@ -1,8 +1,8 @@
 github.com/disgoorg/godave v0.1.0 h1:3g0Zqzz+zNaxQTVLfCnl5eZKGqZk6cM/JLLbMKCtZQQ=
 github.com/disgoorg/godave v0.1.0/go.mod h1:OreAC3hpabr39bMVA+jwOVDq1EUPXH5A0XUBiZaDI1Y=
-github.com/thomas-vilte/mls-go v1.2.1 h1:JBPutMxKqqj+XNMUlHdoU+MnfxCOUrie9PZtjhtfZwA=
-github.com/thomas-vilte/mls-go v1.2.1/go.mod h1:bgIvQH/BHyfcFDuro1CLeqXASSJPFXIJ79WqJuzlRLM=
-golang.org/x/crypto v0.48.0 h1:/VRzVqiRSggnhY7gNRxPauEQ5Drw9haKdM0jqfcCFts=
-golang.org/x/crypto v0.48.0/go.mod h1:r0kV5h3qnFPlQnBSrULhlsRfryS2pmewsg+XfMgkVos=
-golang.org/x/sys v0.42.0 h1:omrd2nAlyT5ESRdCLYdm3+fMfNFE/+Rf4bDIQImRJeo=
-golang.org/x/sys v0.42.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
+github.com/thomas-vilte/mls-go v1.3.0 h1:iJvXCOAkIKiZZ1L5q8jPvsJ+HgZ9VHymEr4BYvnWU7E=
+github.com/thomas-vilte/mls-go v1.3.0/go.mod h1:bgIvQH/BHyfcFDuro1CLeqXASSJPFXIJ79WqJuzlRLM=
+golang.org/x/crypto v0.50.0 h1:zO47/JPrL6vsNkINmLoo/PH1gcxpls50DNogFvB5ZGI=
+golang.org/x/crypto v0.50.0/go.mod h1:3muZ7vA7PBCE6xgPX7nkzzjiUq87kRItoJQM1Yo8S+Q=
+golang.org/x/sys v0.43.0 h1:Rlag2XtaFTxp19wS8MXlJwTvoh8ArU6ezoyFsMyCTNI=
+golang.org/x/sys v0.43.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
