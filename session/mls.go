@@ -502,8 +502,8 @@ func (s *session) commitProposalsLocked() error {
 		context.Background(),
 		s.groupID,
 		mls.CommitPendingProposalsOptions{
-			GroupInfoOpts: group.GroupInfoOptions{
-				IncludeExternalPub: new(false),
+			GroupInfoOptions: []group.GroupInfoOption{
+				group.WithExternalPub(false),
 			},
 		},
 	)
