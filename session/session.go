@@ -68,8 +68,7 @@ type session struct {
 	pendingCommitBytes  []byte
 	preCommitGroupState []byte
 
-	epochReady  chan struct{}
-	encryptLogs int
+	epochReady chan struct{}
 }
 
 type epochState struct {
@@ -121,6 +120,15 @@ func (s *session) MaxEncryptedFrameSize(frameSize int) int {
 }
 
 func (s *session) resetEpochReadyLocked() {
+	// Close the old channel before replacing it so any goroutine blocked
+	// in waitForActiveEpoch wakes up and re-evaluates with the new channel.
+	// Without this, goroutines holding a reference to the old channel
+	// stay stuck until the 3s timeout fires → ErrNoActiveEpoch on reconnect.
+	select {
+	case <-s.epochReady:
+	default:
+		close(s.epochReady)
+	}
 	s.epochReady = make(chan struct{})
 }
 
