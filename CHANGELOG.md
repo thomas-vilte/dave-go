@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v0.2.1] - 2026-05-18
+
+[v0.2.1]: https://github.com/thomas-vilte/dave-go/compare/v0.2.0...v0.2.1
+
+In this patch release, we focused on improving the reliability of our concurrent processes. We addressed a critical synchronization issue to ensure smoother execution of epoch-related tasks.
+
+### 🛡️ Stability & Performance
+
+- Fixed a synchronization issue where the epochReady channel could block goroutines, ensuring more reliable background processing.
+
 ## [v0.2.0] - 2026-04-22
 
 [v0.2.0]: https://github.com/thomas-vilte/dave-go/compare/v0.1.0...v0.2.0
