@@ -483,6 +483,26 @@ func (s *session) restorePreCommitStateLocked() error {
 	return nil
 }
 
+// invalidateAndResendKeyPackageLocked resets the local MLS state and sends a
+// new key package to the voice gateway. Called after SendInvalidCommitWelcome
+// per the DAVE protocol spec §"Recovery from Invalid Commit or Welcome":
+// the client must locally reset MLS state and generate a new key package so
+// the voice gateway can re-add the member via a fresh add proposal.
+// Must be called with s.mu held.
+func (s *session) invalidateAndResendKeyPackageLocked() {
+	s.mlsClient = nil
+	s.groupID = nil
+	s.pendingGroupID = nil
+	s.pendingEpoch = nil
+	s.pendingCommitBytes = nil
+	s.preCommitGroupState = nil
+	s.proposalQueue = nil
+	s.pendingKeyPackage = nil
+	if err := s.ensurePendingKeyPackageLocked(); err != nil {
+		s.logger.Error("failed to send new key package after invalid commit/welcome", "error", err)
+	}
+}
+
 func (s *session) commitProposalsLocked() error {
 	s.logger.Debug("[DAVE] commitProposalsLocked: starting commit", "group_id", fmt.Sprintf("%x", s.groupID))
 
@@ -552,5 +572,33 @@ func (s *session) commitProposalsLocked() error {
 		return nil
 	}
 	s.logger.Debug("[DAVE] commitProposalsLocked: sending commit/welcome to gateway", "payload_size", len(payload))
-	return s.callbacks.SendMLSCommitWelcome(payload)
+	if err := s.callbacks.SendMLSCommitWelcome(payload); err != nil {
+		return err
+	}
+
+	// Start a background recovery goroutine. If Discord does not confirm our
+	// commit via op:29 within the timeout, the epoch will never activate.
+	// The goroutine either exits early when epochReady is closed (normal path)
+	// or triggers InvalidCommitWelcome + MLS state reset so Discord re-adds us.
+	ready := s.epochReady
+	transitionID := s.pendingTransitionID
+	go func() {
+		select {
+		case <-ready:
+			// Epoch activated normally — nothing to do.
+			return
+		case <-time.After(3 * time.Second):
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.pendingEpoch == nil {
+			return
+		}
+		s.logger.Warn("[DAVE] commit not confirmed by Discord, triggering recovery", "transition_id", transitionID)
+		if s.callbacks != nil {
+			_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
+		}
+		s.invalidateAndResendKeyPackageLocked()
+	}()
+	return nil
 }

@@ -2,7 +2,6 @@ package session
 
 import (
 	"bytes"
-	"context"
 	"crypto/cipher"
 	"fmt"
 	"log/slog"
@@ -120,10 +119,7 @@ func (s *session) MaxEncryptedFrameSize(frameSize int) int {
 }
 
 func (s *session) resetEpochReadyLocked() {
-	// Close the old channel before replacing it so any goroutine blocked
-	// in waitForActiveEpoch wakes up and re-evaluates with the new channel.
-	// Without this, goroutines holding a reference to the old channel
-	// stay stuck until the 3s timeout fires → ErrNoActiveEpoch on reconnect.
+	// Close the old channel so any goroutine blocked on it wakes up immediately.
 	select {
 	case <-s.epochReady:
 	default:
@@ -141,43 +137,6 @@ func (s *session) signalEpochReadyLocked() {
 	}
 }
 
-func (s *session) waitForActiveEpoch(timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	waitLogged := false
-
-	for {
-		s.mu.Lock()
-		if s.activeEpoch != nil && s.sendRatchet != nil {
-			if waitLogged {
-				s.logger.Info("active epoch became available")
-			}
-			s.mu.Unlock()
-			return nil
-		}
-		ready := s.epochReady
-		remaining := time.Until(deadline)
-		if !waitLogged {
-			s.logger.Debug("waiting for active epoch", "remaining_ms", remaining.Milliseconds())
-			waitLogged = true
-		}
-		s.mu.Unlock()
-
-		if remaining <= 0 {
-			s.logger.Error("timed out waiting for active epoch")
-			return ErrNoActiveEpoch
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), remaining)
-		select {
-		case <-ready:
-			cancel()
-		case <-ctx.Done():
-			cancel()
-			return ErrNoActiveEpoch
-		}
-	}
-}
-
 func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) (int, error) {
 	s.mu.RLock()
 	_, ok := s.ssrcCodecs[ssrc]
@@ -186,12 +145,12 @@ func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 		return 0, fmt.Errorf("no codec assigned for ssrc %d", ssrc)
 	}
 
-	if err := s.waitForActiveEpoch(3 * time.Second); err != nil {
-		return 0, fmt.Errorf("session: %w", err)
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.activeEpoch == nil || s.sendRatchet == nil {
+		return 0, fmt.Errorf("session: %w", ErrNoActiveEpoch)
+	}
 
 	kind, ok := s.ssrcCodecs[ssrc]
 	if !ok || kind == codecs.CodecUnknown {
@@ -319,6 +278,23 @@ func (s *session) OnSelectProtocolAck(protocolVersion uint16) {
 	defer s.mu.Unlock()
 	s.protocolVersion = protocolVersion
 	if protocolVersion > 0 {
+		// select_protocol_ack always marks a new voice connection — reset all
+		// group state so stale data from a previous channel cannot block
+		// re-creation of the MLS group on the new connection.
+		s.activeEpoch = nil
+		s.pendingEpoch = nil
+		s.retainedEpoch = nil
+		s.groupID = nil
+		s.pendingGroupID = nil
+		s.pendingCommitBytes = nil
+		s.preCommitGroupState = nil
+		s.proposalQueue = nil
+		s.resetEpochReadyLocked()
+		s.sendCounter.Reset()
+		s.sendRatchet = nil
+
+		s.pendingKeyPackage = nil
+		s.mlsClient = nil
 		if err := s.ensurePendingKeyPackageLocked(); err != nil {
 			s.logger.Error("failed to prepare key package on protocol ack", "error", err)
 		}
@@ -467,6 +443,7 @@ func (s *session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMe
 			if s.callbacks != nil {
 				_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
 			}
+			s.invalidateAndResendKeyPackageLocked()
 			return
 		}
 	}
@@ -521,6 +498,7 @@ func (s *session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
 		if s.callbacks != nil {
 			_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
 		}
+		s.invalidateAndResendKeyPackageLocked()
 		return
 	}
 	s.logger.Debug("[DAVE] OnDaveMLSWelcome: joined successfully", "pending_epoch_set", s.pendingEpoch != nil, "pending_epoch_id", func() uint64 {
