@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v0.2.2] - 2026-06-01
+
+[v0.2.2]: https://github.com/thomas-vilte/dave-go/compare/v0.2.1...v0.2.2
+
+We focused on enhancing the stability of secure messaging sessions by implementing robust recovery mechanisms. These changes ensure that MLS states are correctly managed during reconnections and that encryption processes no longer block system performance.
+
+### 🛡️ Security & Session Stability
+
+- We implemented MLS commit recovery to ensure secure communication remains consistent even after unexpected errors.
+- We added robust state resets when reconnecting to prevent stale session data from causing synchronization issues.
+
+### 🚀 Performance Improvements
+
+- We optimized the encryption process to be non-blocking, significantly improving overall application responsiveness during secure data handling.
+
+### References
+
+- [#7](https://github.com/thomas-vilte/dave-go/pull/7)
+
 ## [v0.2.1] - 2026-05-18
 
 [v0.2.1]: https://github.com/thomas-vilte/dave-go/compare/v0.2.0...v0.2.1
