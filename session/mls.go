@@ -587,7 +587,7 @@ func (s *session) commitProposalsLocked() error {
 		case <-ready:
 			// Epoch activated normally — nothing to do.
 			return
-		case <-time.After(3 * time.Second):
+		case <-time.After(15 * time.Second):
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
