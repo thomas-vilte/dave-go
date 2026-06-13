@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v0.2.3] - 2026-06-13
+
+[v0.2.3]: https://github.com/thomas-vilte/dave-go/compare/v0.2.2...v0.2.3
+
+In this release, we focused on optimizing the core messaging performance and improving the reliability of MLS operations. We introduced zero-allocation encryption and more descriptive error handling to provide a faster and more stable experience.
+
+### 🚀 Performance
+
+- Implemented zero-allocation encryption and ratchet caching to significantly reduce memory overhead and improve processing speed.
+
+### 🛡️ Stability & Reliability
+
+- Extended the MLS epoch activation timeout to ensure more reliable synchronization and prevent premature failures.
+
+### 🔧 Developer Experience
+
+- Introduced detailed MLS operation errors to provide clearer feedback and easier debugging.
+- Standardized error handling across the project and updated dependencies to the latest versions for a more robust foundation.
+
 ## [v0.2.2] - 2026-06-01
 
 [v0.2.2]: https://github.com/thomas-vilte/dave-go/compare/v0.2.1...v0.2.2
