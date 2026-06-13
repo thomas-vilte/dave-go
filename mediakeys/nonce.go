@@ -3,6 +3,7 @@ package mediakeys
 func GenerationFromTruncatedNonce(nonce uint32) uint32 {
 	return nonce >> 24
 }
+
 func TruncatedNonceFromCounter(counter uint64) uint32 {
 	return uint32(counter)
 }
@@ -18,11 +19,13 @@ func NewNonceCounter() *NonceCounter {
 func (c *NonceCounter) Current() uint64 {
 	return c.counter
 }
+
 func (c *NonceCounter) Next() (full uint64, truncated uint32, generation uint32) {
 	c.counter++
 	full = c.counter
 	truncated = uint32(full)
 	generation = uint32(full >> 24)
+
 	return full, truncated, generation
 }
 
@@ -47,6 +50,7 @@ func (e *NonceExpander) Expand(truncated uint32) uint64 {
 		full := uint64(truncated)
 		e.initialized = true
 		e.highestSeen = full
+
 		return full
 	}
 
@@ -69,6 +73,7 @@ func (e *NonceExpander) Expand(truncated uint32) uint64 {
 	if best > e.highestSeen {
 		e.highestSeen = best
 	}
+
 	return best
 }
 
@@ -76,5 +81,6 @@ func absDiff(a, b uint64) uint64 {
 	if a > b {
 		return a - b
 	}
+
 	return b - a
 }

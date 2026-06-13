@@ -10,17 +10,25 @@ import (
 	"time"
 
 	"github.com/disgoorg/godave"
+	"github.com/thomas-vilte/dave-go/mediakeys"
 	"github.com/thomas-vilte/mls-go"
 	"github.com/thomas-vilte/mls-go/ciphersuite"
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/group"
 	"github.com/thomas-vilte/mls-go/keypackages"
 	memorystore "github.com/thomas-vilte/mls-go/storage/memory"
-
-	"github.com/thomas-vilte/dave-go/mediakeys"
 )
 
 const epochRetention = 10 * time.Second
+
+const (
+	// epochRecoveryTimeout is how long we wait for Discord to activate an
+	// epoch before triggering recovery.
+	epochRecoveryTimeout = 15 * time.Second
+	// maxRecoveryAttempts bounds the invalidate → new key package → wait
+	// loop. Past this, only a full voice reconnect can fix the session.
+	maxRecoveryAttempts = 3
+)
 
 type mlsClientWrapper struct {
 	client *mls.Client
@@ -34,7 +42,7 @@ type exporterAdapter struct {
 
 func (e exporterAdapter) Export(label string, ctx []byte, length int) ([]byte, error) {
 	if e.store == nil {
-		return nil, fmt.Errorf("mls exporter store is nil")
+		return nil, ErrNilExporterStore
 	}
 
 	state, err := e.store.LoadGroupState(context.Background(), group.NewGroupID(e.groupID))
@@ -42,30 +50,31 @@ func (e exporterAdapter) Export(label string, ctx []byte, length int) ([]byte, e
 		return nil, fmt.Errorf("load group state for exporter: %w", err)
 	}
 
-	g, err := group.UnmarshalGroupState(state)
+	groupState, err := group.UnmarshalGroupState(state)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal group state for exporter: %w", err)
 	}
 
-	if g.EpochSecrets() == nil || g.EpochSecrets().ExporterSecret == nil {
-		return nil, fmt.Errorf("exporter secret not available")
+	if groupState.EpochSecrets() == nil || groupState.EpochSecrets().ExporterSecret == nil {
+		return nil, ErrExporterSecretUnavailable
 	}
 
 	exporterSecretPrefixLen := 8
-	exporterSecretBytes := g.EpochSecrets().ExporterSecret.AsSlice()
+	exporterSecretBytes := groupState.EpochSecrets().ExporterSecret.AsSlice()
 	if len(exporterSecretBytes) < exporterSecretPrefixLen {
 		exporterSecretPrefixLen = len(exporterSecretBytes)
 	}
 
-	discordExport, err := mediakeys.ExportWithMLSExporterSecret(g.EpochSecrets().ExporterSecret, g.CipherSuite(), label, ctx, length)
+	discordExport, err := mediakeys.ExportWithMLSExporterSecret(
+		groupState.EpochSecrets().ExporterSecret,
+		groupState.CipherSuite(),
+		label, ctx, length,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	exportPrefixLen := 8
-	if len(discordExport) < exportPrefixLen {
-		exportPrefixLen = len(discordExport)
-	}
+	exportPrefixLen := min(len(discordExport), 8)
 
 	slog.Default().Debug("[DAVE] exporter derivation",
 		"group_id", fmt.Sprintf("%x", e.groupID),
@@ -78,26 +87,28 @@ func (e exporterAdapter) Export(label string, ctx []byte, length int) ([]byte, e
 	return discordExport, nil
 }
 
-func userIDToIdentityBytes(userID godave.UserID) ([]byte, uint64, error) {
+func userIDToIdentityBytes(userID godave.UserID) ([]byte, error) {
 	n, err := strconv.ParseUint(string(userID), 10, 64)
 	if err != nil {
-		return nil, 0, fmt.Errorf("parse user id %q: %w", userID, err)
+		return nil, fmt.Errorf("parse user id %q: %w", userID, err)
 	}
 
 	// DAVE credential identity = user snowflake as big-endian uint64.
 	// Verified against golibdave/libdave wire bytes: identity is BE.
 	identity := make([]byte, 8)
 	binary.BigEndian.PutUint64(identity, n)
-	return identity, n, nil
+
+	return identity, nil
 }
 
 func identityBytesToUserID(identity []byte) (godave.UserID, uint64, error) {
 	if len(identity) != 8 {
-		return "", 0, fmt.Errorf("unexpected credential identity length: %d", len(identity))
+		return "", 0, fmt.Errorf("%w: %d", ErrInvalidCredentialIdentity, len(identity))
 	}
 
 	// DAVE credential identity = user snowflake as big-endian uint64.
 	n := binary.BigEndian.Uint64(identity)
+
 	return godave.UserID(strconv.FormatUint(n, 10)), n, nil
 }
 
@@ -106,7 +117,7 @@ func (s *session) ensureMLSClientLocked() error {
 		return nil
 	}
 
-	identity, _, err := userIDToIdentityBytes(s.userID)
+	identity, err := userIDToIdentityBytes(s.userID)
 	if err != nil {
 		return err
 	}
@@ -123,6 +134,7 @@ func (s *session) ensureMLSClientLocked() error {
 	}
 
 	s.mlsClient = &mlsClientWrapper{client: client, store: store}
+
 	return nil
 }
 
@@ -145,11 +157,12 @@ func (s *session) ensurePendingKeyPackageLocked() error {
 
 	s.pendingKeyPackage = append([]byte(nil), kp...)
 	if s.callbacks != nil {
-		// libdave sends the marshalled KeyPackage directly for opcode 26.
+		// libdave sends the marshaled KeyPackage directly for opcode 26.
 		if err := s.callbacks.SendMLSKeyPackage(kp); err != nil {
 			return fmt.Errorf("send mls key package: %w", err)
 		}
 	}
+
 	return nil
 }
 
@@ -169,12 +182,13 @@ func (s *session) joinPendingWelcomeLocked(welcome []byte) error {
 		return err
 	}
 	s.pendingEpoch = epochState
+
 	return nil
 }
 
 func (s *session) processCommitLocked(commit []byte) error {
 	if len(s.groupID) == 0 {
-		return fmt.Errorf("no active group for commit")
+		return ErrNoActiveGroup
 	}
 
 	if err := s.mlsClient.client.ProcessCommit(context.Background(), s.groupID, commit); err != nil {
@@ -188,6 +202,7 @@ func (s *session) processCommitLocked(commit []byte) error {
 
 	s.pendingEpoch = epochState
 	s.pendingGroupID = append([]byte(nil), s.groupID...)
+
 	return nil
 }
 
@@ -203,7 +218,7 @@ func (s *session) processCommitLocked(commit []byte) error {
 // Returns (length, bytesConsumed, error).
 func readTLSVectorLength(data []byte) (uint32, int, error) {
 	if len(data) == 0 {
-		return 0, 0, fmt.Errorf("empty vector length")
+		return 0, 0, fmt.Errorf("%w: empty", ErrInvalidVectorLength)
 	}
 
 	prefix := data[0] >> 6
@@ -212,29 +227,33 @@ func readTLSVectorLength(data []byte) (uint32, int, error) {
 		return uint32(data[0] & 0x3F), 1, nil
 	case 1: // 2-byte encoding
 		if len(data) < 2 {
-			return 0, 0, fmt.Errorf("truncated 2-byte vector length")
+			return 0, 0, fmt.Errorf("%w: truncated 2-byte", ErrInvalidVectorLength)
 		}
 		v := uint32(data[0]&0x3F)<<8 | uint32(data[1])
+
 		return v, 2, nil
 	case 2: // 4-byte encoding
 		if len(data) < 4 {
-			return 0, 0, fmt.Errorf("truncated 4-byte vector length")
+			return 0, 0, fmt.Errorf("%w: truncated 4-byte", ErrInvalidVectorLength)
 		}
 		v := uint32(data[0]&0x3F)<<24 | uint32(data[1])<<16 | uint32(data[2])<<8 | uint32(data[3])
+
 		return v, 4, nil
 	default:
-		return 0, 0, fmt.Errorf("unsupported 8-byte vector length encoding")
+		return 0, 0, fmt.Errorf("%w: unsupported 8-byte encoding", ErrInvalidVectorLength)
 	}
 }
 
 func (s *session) processProposalBatchLocked(proposals []byte) error {
 	if len(proposals) == 0 {
 		s.logger.Debug("[DAVE] processProposalBatchLocked: empty proposals")
+
 		return nil
 	}
 	if len(s.groupID) == 0 {
 		// DAVE spec §5: if no local group exists, proposals are ignored.
 		s.logger.Debug("[DAVE] processProposalBatchLocked: no group, ignoring proposals")
+
 		return nil
 	}
 
@@ -242,7 +261,7 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 	// uint8 operation_type || TLSVector<MLSMessage>
 	// operation_type: 0=append, 1=revoke
 	if len(proposals) < 1 {
-		return fmt.Errorf("proposals too short: %d bytes", len(proposals))
+		return fmt.Errorf("%w: %d bytes", ErrProposalsTooShort, len(proposals))
 	}
 
 	operationType := proposals[0]
@@ -250,6 +269,7 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 	if operationType != 0 {
 		// revoke: not yet handled — ignore safely
 		s.logger.Debug("[DAVE] processProposalBatchLocked: revoke operation, ignoring")
+
 		return nil
 	}
 
@@ -262,7 +282,7 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 	}
 	end := headerSize + int(vecLen)
 	if end > len(payload) {
-		return fmt.Errorf("proposals vector truncated: need %d bytes, have %d", end, len(payload))
+		return fmt.Errorf("%w: need %d bytes, have %d", ErrProposalsTruncated, end, len(payload))
 	}
 
 	s.logger.Debug("[DAVE] proposals vector parsed",
@@ -274,10 +294,13 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 	remaining := payload[headerSize:end]
 	for i := 0; len(remaining) > 0; i++ {
 		if len(remaining) < 4 {
-			return fmt.Errorf("proposal too short: %d bytes", len(remaining))
+			return fmt.Errorf("%w: %d bytes", ErrProposalTooShort, len(remaining))
 		}
 		wireOriginal := remaining
-		s.logger.Debug("[DAVE] parsing proposal", "index", i, "remaining_bytes", len(remaining), "wire_hex", fmt.Sprintf("%x", remaining[:minInt(64, len(remaining))]))
+		s.logger.Debug("[DAVE] parsing proposal",
+			"index", i,
+			"remaining_bytes", len(remaining),
+			"wire_hex", fmt.Sprintf("%x", remaining[:minInt(64, len(remaining))]))
 
 		msg, err := framing.UnmarshalMLSMessage(remaining)
 		if err != nil {
@@ -286,10 +309,10 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 
 		wire := msg.Marshal()
 		if len(wire) == 0 {
-			return fmt.Errorf("empty marshalled proposal")
+			return ErrEmptyProposal
 		}
 
-		// Use original bytes (not re-marshalled) so ProposalRef hash matches gateway's computation.
+		// Use original bytes (not re-marshaled) so ProposalRef hash matches gateway's computation.
 		if err := s.mlsClient.client.ProcessPublicMessage(context.Background(), s.groupID, wireOriginal[:len(wire)]); err != nil {
 			return fmt.Errorf("process proposal public message: %w", err)
 		}
@@ -297,6 +320,7 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 	}
 
 	s.logger.Debug("[DAVE] processProposalBatchLocked: all proposals processed successfully")
+
 	return nil
 }
 
@@ -328,10 +352,7 @@ func (s *session) rebuildEpochStateLocked(groupID []byte) (*epochState, error) {
 		if err != nil {
 			return nil, fmt.Errorf("derive sender base secret for %s: %w", memberUserID, err)
 		}
-		baseSecretPreviewLen := 8
-		if len(baseSecret) < baseSecretPreviewLen {
-			baseSecretPreviewLen = len(baseSecret)
-		}
+		baseSecretPreviewLen := min(len(baseSecret), 8)
 
 		ratchet, err := mediakeys.NewKeyRatchet(baseSecret)
 		if err != nil {
@@ -342,10 +363,7 @@ func (s *session) rebuildEpochStateLocked(groupID []byte) (*epochState, error) {
 		if err != nil {
 			return nil, fmt.Errorf("derive generation 0 key for %s: %w", memberUserID, err)
 		}
-		generationZeroPreviewLen := 8
-		if len(generationZeroKey) < generationZeroPreviewLen {
-			generationZeroPreviewLen = len(generationZeroKey)
-		}
+		generationZeroPreviewLen := min(len(generationZeroKey), 8)
 
 		s.logger.Debug("[DAVE] sender key material derived",
 			"epoch_id", epochID,
@@ -368,13 +386,18 @@ func minInt(a, b int) int {
 	if a < b {
 		return a
 	}
+
 	return b
 }
 
 func (s *session) activatePendingEpochLocked() {
-	s.logger.Debug("[DAVE] activatePendingEpochLocked called", "pending_epoch_set", s.pendingEpoch != nil, "active_epoch_set", s.activeEpoch != nil, "user_id", s.userID)
+	s.logger.Debug("[DAVE] activatePendingEpochLocked called",
+		"pending_epoch_set", s.pendingEpoch != nil,
+		"active_epoch_set", s.activeEpoch != nil,
+		"user_id", s.userID)
 	if s.pendingEpoch == nil {
 		s.logger.Warn("[DAVE] activatePendingEpochLocked: pendingEpoch is nil, no-op")
+
 		return
 	}
 
@@ -392,11 +415,24 @@ func (s *session) activatePendingEpochLocked() {
 
 	if sender := s.activeEpoch.senders[s.userID]; sender != nil {
 		s.sendRatchet = sender.ratchet
+		s.recoveryAttempts = 0
+		if !s.degradedSince.IsZero() {
+			s.logger.Info("[DAVE] session recovered", "degraded_for", time.Since(s.degradedSince).String(), "epoch_id", s.activeEpoch.id)
+			s.degradedSince = time.Time{}
+		}
 		s.signalEpochReadyLocked()
-		s.logger.Debug("[DAVE] activatePendingEpochLocked: epoch activated", "epoch_id", s.activeEpoch.id, "sender_count", len(s.activeEpoch.senders), "send_ratchet_set", true)
+		s.logger.Debug("[DAVE] activatePendingEpochLocked: epoch activated",
+			"epoch_id", s.activeEpoch.id,
+			"sender_count", len(s.activeEpoch.senders),
+			"send_ratchet_set", true)
 	} else {
 		s.sendRatchet = nil
-		s.logger.Warn("[DAVE] activatePendingEpochLocked: epoch activated but NO send ratchet (self not in senders map)", "epoch_id", s.activeEpoch.id, "sender_count", len(s.activeEpoch.senders))
+		if s.degradedSince.IsZero() {
+			s.degradedSince = time.Now()
+		}
+		s.logger.Warn("[DAVE] activatePendingEpochLocked: epoch activated but NO send ratchet (self not in senders map)",
+			"epoch_id", s.activeEpoch.id,
+			"sender_count", len(s.activeEpoch.senders))
 	}
 
 	s.pruneRetainedEpochsLocked()
@@ -435,7 +471,7 @@ func (s *session) createGroupWithExternalSenderLocked() error {
 		return nil // group already created
 	}
 	if len(s.externalSenderPackage) == 0 {
-		return fmt.Errorf("no external sender package available")
+		return ErrNoExternalSender
 	}
 	if err := s.ensureMLSClientLocked(); err != nil {
 		return err
@@ -461,6 +497,7 @@ func (s *session) createGroupWithExternalSenderLocked() error {
 
 	s.groupID = append([]byte(nil), groupID...)
 	s.logger.Info("mls group created", "group_id", fmt.Sprintf("%x", s.groupID))
+
 	return nil
 }
 
@@ -470,7 +507,7 @@ func (s *session) createGroupWithExternalSenderLocked() error {
 // winning commit from the correct base epoch. Must be called with s.mu held.
 func (s *session) restorePreCommitStateLocked() error {
 	if len(s.preCommitGroupState) == 0 {
-		return fmt.Errorf("no pre-commit state to restore")
+		return ErrNoPreCommitState
 	}
 	gid := group.NewGroupID(s.groupID)
 	if err := s.mlsClient.store.SaveGroupState(context.Background(), gid, s.preCommitGroupState); err != nil {
@@ -480,6 +517,7 @@ func (s *session) restorePreCommitStateLocked() error {
 	s.pendingGroupID = nil
 	s.pendingCommitBytes = nil
 	s.preCommitGroupState = nil
+
 	return nil
 }
 
@@ -498,9 +536,60 @@ func (s *session) invalidateAndResendKeyPackageLocked() {
 	s.preCommitGroupState = nil
 	s.proposalQueue = nil
 	s.pendingKeyPackage = nil
+	if s.degradedSince.IsZero() {
+		s.degradedSince = time.Now()
+	}
+	// Fresh channel so the recovery watchdog waits for an epoch activated
+	// AFTER this invalidation, not one that was already active before.
+	s.resetEpochReadyLocked()
 	if err := s.ensurePendingKeyPackageLocked(); err != nil {
 		s.logger.Error("failed to send new key package after invalid commit/welcome", "error", err)
 	}
+	s.watchRecoveryLocked()
+}
+
+// watchRecoveryLocked supervises recovery after an MLS state invalidation.
+// The DAVE spec expects Discord to re-add us via a fresh Welcome after we
+// send a new key package; if that never happens the session is stuck without
+// an active epoch and every Encrypt fails (audio goes silent forever).
+// Retry the invalid-commit signal a bounded number of times, then surface
+// the failure. Must be called with s.mu held.
+func (s *session) watchRecoveryLocked() {
+	if s.recoveryAttempts >= maxRecoveryAttempts {
+		s.logger.Error("[DAVE] session did not recover after repeated invalidations; a full voice reconnect is required",
+			"attempts", s.recoveryAttempts)
+
+		return
+	}
+	s.recoveryAttempts++
+	s.stats.RecoveryAttempts++
+
+	ready := s.epochReady
+	transitionID := s.pendingTransitionID
+	attempt := s.recoveryAttempts
+	timeout := s.recoveryTimeout
+	go func() {
+		select {
+		case <-ready:
+			// Epoch activated (or a newer invalidation took over supervision).
+			return
+		case <-time.After(timeout):
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		select {
+		case <-ready:
+			// Activated while we were acquiring the lock.
+			return
+		default:
+		}
+		s.logger.Warn("[DAVE] no epoch activated after invalidation, retrying recovery",
+			"attempt", attempt, "transition_id", transitionID)
+		if s.callbacks != nil {
+			_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
+		}
+		s.invalidateAndResendKeyPackageLocked()
+	}()
 }
 
 func (s *session) commitProposalsLocked() error {
@@ -522,7 +611,7 @@ func (s *session) commitProposalsLocked() error {
 		context.Background(),
 		s.groupID,
 		mls.CommitPendingProposalsOptions{
-			GroupInfoOptions: []group.GroupInfoOption{
+			GroupInfoOptions: []group.InfoOption{
 				group.WithExternalPub(false),
 			},
 		},
@@ -548,7 +637,14 @@ func (s *session) commitProposalsLocked() error {
 	s.pendingEpoch = epochState
 	s.pendingGroupID = append([]byte(nil), s.groupID...)
 
-	s.logger.Debug("[DAVE] commitProposalsLocked: pendingEpoch set", "epoch_id", epochState.id, "sender_count", len(epochState.senders), "has_self", func() bool { _, ok := epochState.senders[s.userID]; return ok }())
+	s.logger.Debug("[DAVE] commitProposalsLocked: pendingEpoch set",
+		"epoch_id", epochState.id,
+		"sender_count", len(epochState.senders),
+		"has_self", func() bool {
+			_, ok := epochState.senders[s.userID]
+
+			return ok
+		}())
 
 	// DAVE opcode 28 spec v1.1.2:
 	// MLSMessage(commit) || Welcome(struct)
@@ -563,12 +659,13 @@ func (s *session) commitProposalsLocked() error {
 		if wMsg.Welcome != nil {
 			payload = append(payload, wMsg.Welcome...)
 		} else {
-			return fmt.Errorf("expected Welcome in MLSMessage")
+			return ErrExpectedWelcome
 		}
 	}
 
 	if s.callbacks == nil {
 		s.logger.Debug("[DAVE] commitProposalsLocked: no callbacks, skipping send")
+
 		return nil
 	}
 	s.logger.Debug("[DAVE] commitProposalsLocked: sending commit/welcome to gateway", "payload_size", len(payload))
@@ -587,7 +684,7 @@ func (s *session) commitProposalsLocked() error {
 		case <-ready:
 			// Epoch activated normally — nothing to do.
 			return
-		case <-time.After(15 * time.Second):
+		case <-time.After(epochRecoveryTimeout):
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -600,5 +697,6 @@ func (s *session) commitProposalsLocked() error {
 		}
 		s.invalidateAndResendKeyPackageLocked()
 	}()
+
 	return nil
 }

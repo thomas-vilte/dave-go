@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -16,7 +17,6 @@ import (
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
-
 	"github.com/thomas-vilte/dave-go/session"
 )
 
@@ -31,6 +31,7 @@ func envOrDefault(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
+
 	return fallback
 }
 
@@ -55,6 +56,7 @@ func main() {
 	)
 	if err != nil {
 		slog.Error("error creating client", slog.Any("err", err))
+
 		return
 	}
 
@@ -66,6 +68,7 @@ func main() {
 
 	if err = client.OpenGateway(context.TODO()); err != nil {
 		slog.Error("error connecting to gateway", slog.Any("error", err))
+
 		return
 	}
 
@@ -121,13 +124,14 @@ func writeOpus(w io.Writer) {
 	for ; true; <-ticker.C {
 		err = binary.Read(file, binary.LittleEndian, &frameLen)
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return
 			}
+
 			panic("error reading file: " + err.Error())
 		}
 
-		if _, err = io.CopyN(w, file, int64(frameLen)); err != nil && err != io.EOF {
+		if _, err = io.CopyN(w, file, int64(frameLen)); err != nil && !errors.Is(err, io.EOF) {
 			return
 		}
 	}

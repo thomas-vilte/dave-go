@@ -18,6 +18,7 @@ func (f *fakeExporter) Export(label string, ctx []byte, length int) ([]byte, err
 	f.label = label
 	f.ctx = append([]byte(nil), ctx...)
 	f.length = length
+
 	return append([]byte(nil), f.secret...), f.err
 }
 

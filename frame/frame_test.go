@@ -34,6 +34,7 @@ func discordMLSReferenceEncryptSecureFrame(key []byte, nonce uint32, opusData []
 	result = append(result, nonceBytes...)
 	result = append(result, supplementalSize)
 	result = append(result, 0xFA, 0xFA)
+
 	return result
 }
 

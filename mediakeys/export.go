@@ -20,6 +20,7 @@ type Exporter interface {
 func SenderIDContextLE(senderID uint64) []byte {
 	buf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(buf, senderID)
+
 	return buf
 }
 
@@ -34,7 +35,7 @@ func DeriveSenderBaseSecret(exporter Exporter, senderID uint64) ([]byte, error) 
 	}
 
 	if len(secret) != BaseSecretLen {
-		return nil, fmt.Errorf("derive sender base secret: got %d bytes", len(secret))
+		return nil, fmt.Errorf("derive sender base secret: %w: got %d bytes", ErrInvalidBaseSecret, len(secret))
 	}
 
 	return secret, nil

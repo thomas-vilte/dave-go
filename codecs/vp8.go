@@ -19,7 +19,7 @@ import "github.com/thomas-vilte/dave-go/frame"
 // "VP8 frames leave 1 or 10 bytes unencrypted, depending on whether or not
 // the incoming frame is a key frame"
 // "If P = 0, leave 10 bytes unencrypted to cover the full uncompressed VP8 header"
-// "Else P = 1, leave 1 byte unencrypted (just the payload header)"
+// "Else P = 1, leave 1 byte unencrypted (just the payload header)".
 func vp8Ranges(payload []byte) ([]frame.Range, error) {
 	if len(payload) == 0 {
 		return nil, nil
