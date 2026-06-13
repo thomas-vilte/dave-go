@@ -10,7 +10,7 @@ import (
 //
 // Reference: protocol.md "AV1":
 // "The header and payload for OBU types that would be dropped by the WebRTC
-// packetizer are dropped by the encrypting frame transformer"
+// packetizer are dropped by the encrypting frame transformer".
 const (
 	obuTemporalDelimiter = 2
 	obuTileList          = 8
@@ -34,7 +34,7 @@ const (
 // header (1 byte) + optional extension (1 byte) + LEB128 size (for OBUs that
 // aren't the last). Each OBU's payload is fully encrypted.
 //
-// Reference: protocol.md "AV1"
+// Reference: protocol.md "AV1".
 func prepareAV1Frame(payload []byte) ([]byte, []frame.Range, error) {
 	if len(payload) == 0 {
 		return nil, nil, nil
@@ -90,6 +90,7 @@ func prepareAV1Frame(payload []byte) ([]byte, []frame.Range, error) {
 
 		if shouldDropOBU(obuType) {
 			offset += payloadSize
+
 			continue
 		}
 
@@ -180,5 +181,6 @@ func decodeLEB128(data []byte) (uint64, int, error) {
 		}
 		shift += 7
 	}
+
 	return 0, 0, frame.ErrInvalidULEB128
 }

@@ -41,7 +41,7 @@ const (
 //     field from the last OBU) then encrypts the transformed frame.
 //   - OPUS, VP8, VP9: figures out the unencrypted ranges and encrypts directly.
 //
-// Reference: protocol.md "Codec Handling"
+// Reference: protocol.md "Codec Handling".
 func Encrypt(kind Kind, plaintext, key []byte, nonce uint32) ([]byte, error) {
 	switch kind {
 	case CodecH264, CodecH265:
@@ -51,6 +51,7 @@ func Encrypt(kind Kind, plaintext, key []byte, nonce uint32) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		return frame.Encrypt(frame.EncryptParams{
 			Plaintext:         transformed,
 			Key:               key,
@@ -62,6 +63,7 @@ func Encrypt(kind Kind, plaintext, key []byte, nonce uint32) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		return frame.Encrypt(frame.EncryptParams{
 			Plaintext:         plaintext,
 			Key:               key,
@@ -81,6 +83,7 @@ func EncryptWithCipher(kind Kind, plaintext []byte, gcm cipher.AEAD, nonce uint3
 		if err != nil {
 			return nil, err
 		}
+
 		return frame.EncryptWithCipher(frame.EncryptWithCipherParams{
 			Plaintext:         transformed,
 			Cipher:            gcm,
@@ -92,7 +95,81 @@ func EncryptWithCipher(kind Kind, plaintext []byte, gcm cipher.AEAD, nonce uint3
 		if err != nil {
 			return nil, err
 		}
+
 		return frame.EncryptWithCipher(frame.EncryptWithCipherParams{
+			Plaintext:         plaintext,
+			Cipher:            gcm,
+			TruncatedNonce:    nonce,
+			UnencryptedRanges: ranges,
+		})
+	}
+}
+
+// EncryptInto is like Encrypt but writes the encrypted frame into dst and
+// returns the number of bytes written, instead of allocating a new slice.
+//
+// For OPUS/VP9 (no unencrypted ranges) and cap(dst) >= len(plaintext)+16,
+// this performs zero heap allocations. dst and plaintext must not overlap.
+func EncryptInto(kind Kind, dst, plaintext, key []byte, nonce uint32) (int, error) {
+	switch kind {
+	case CodecH264, CodecH265:
+		return encryptH26xInto(kind, dst, plaintext, key, nonce)
+	case CodecAV1:
+		transformed, ranges, err := prepareAV1Frame(plaintext)
+		if err != nil {
+			return 0, err
+		}
+
+		return frame.EncryptInto(dst, frame.EncryptParams{
+			Plaintext:         transformed,
+			Key:               key,
+			TruncatedNonce:    nonce,
+			UnencryptedRanges: ranges,
+		})
+	default:
+		ranges, err := UnencryptedRanges(kind, plaintext)
+		if err != nil {
+			return 0, err
+		}
+
+		return frame.EncryptInto(dst, frame.EncryptParams{
+			Plaintext:         plaintext,
+			Key:               key,
+			TruncatedNonce:    nonce,
+			UnencryptedRanges: ranges,
+		})
+	}
+}
+
+// EncryptWithCipherInto is like EncryptWithCipher but writes the encrypted
+// frame into dst and returns the number of bytes written, instead of
+// allocating a new slice.
+//
+// For OPUS/VP9 (no unencrypted ranges) and cap(dst) >= len(plaintext)+16,
+// this performs zero heap allocations. H264/H265 with start-code retry falls
+// back to EncryptInto (requires the key to retry with nonce+1). dst and
+// plaintext must not overlap.
+func EncryptWithCipherInto(kind Kind, dst, plaintext []byte, gcm cipher.AEAD, nonce uint32) (int, error) {
+	switch kind {
+	case CodecAV1:
+		transformed, ranges, err := prepareAV1Frame(plaintext)
+		if err != nil {
+			return 0, err
+		}
+
+		return frame.EncryptWithCipherInto(dst, frame.EncryptWithCipherParams{
+			Plaintext:         transformed,
+			Cipher:            gcm,
+			TruncatedNonce:    nonce,
+			UnencryptedRanges: ranges,
+		})
+	default:
+		ranges, err := UnencryptedRanges(kind, plaintext)
+		if err != nil {
+			return 0, err
+		}
+
+		return frame.EncryptWithCipherInto(dst, frame.EncryptWithCipherParams{
 			Plaintext:         plaintext,
 			Cipher:            gcm,
 			TruncatedNonce:    nonce,

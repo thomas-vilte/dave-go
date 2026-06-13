@@ -140,6 +140,7 @@ func buildOBU(obuType byte, hasExt bool, hasSize bool, payload []byte) []byte {
 		}
 	}
 	obu = append(obu, payload...)
+
 	return obu
 }
 

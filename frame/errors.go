@@ -10,4 +10,5 @@ var (
 	ErrInvalidRanges           = errors.New("invalid unencrypted ranges")
 	ErrInvalidKeyLength        = errors.New("invalid AES-128 key length (must be 16 bytes)")
 	ErrAuthTagMismatch         = errors.New("authentication failed")
+	ErrBufferTooSmall          = errors.New("destination buffer too small")
 )

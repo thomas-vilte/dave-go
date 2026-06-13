@@ -108,6 +108,41 @@ func TestKeyRatchetCurrentGeneration(t *testing.T) {
 	}
 }
 
+func TestKeyRatchetCachesCurrentGeneration(t *testing.T) {
+	now := time.Unix(100, 0)
+	base := bytes.Repeat([]byte{0x55}, 16)
+	r, err := NewKeyRatchet(base, WithClock(func() time.Time { return now }))
+	if err != nil {
+		t.Fatalf("NewKeyRatchet: %v", err)
+	}
+
+	k, err := r.GetKey(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.cache[0]; !ok {
+		t.Fatal("current generation key must be cached after GetKey")
+	}
+
+	// Mutating the returned slice must not corrupt the cached copy.
+	k[0] ^= 0xFF
+	again, err := r.GetKey(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := NewKeyRatchet(base)
+	if err != nil {
+		t.Fatalf("NewKeyRatchet: %v", err)
+	}
+	want, err := fresh.GetKey(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(again, want) {
+		t.Fatal("cached current generation key was corrupted by caller mutation")
+	}
+}
+
 func TestKeyRatchetMatchesDaveyVector(t *testing.T) {
 	base := []byte{206, 221, 97, 177, 184, 161, 202, 105, 4, 101, 84, 40, 44, 247, 11, 123}
 	r, err := NewKeyRatchet(base)
