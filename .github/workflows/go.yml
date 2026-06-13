@@ -26,10 +26,7 @@ permissions:
   contents: read
 
 jobs:
-  # The if guard skips the duplicate run that a PR from a branch in this same
-  # repo would trigger, since the 'push' event already covers it.
   test:
-    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -71,7 +68,6 @@ jobs:
           if-no-files-found: ignore
 
   golangci:
-    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
