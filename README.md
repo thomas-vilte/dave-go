@@ -1,7 +1,7 @@
 # dave-go
 
 [![Release](https://img.shields.io/github/v/release/thomas-vilte/dave-go?sort=semver)](https://github.com/thomas-vilte/dave-go/releases)
-[![License](https://img.shields.io/github/license/thomas-vilte/dave-go)](https://github.com/thomas-vilte/dave-go/blob/master/LICENSE)
+[![License](https://img.shields.io/github/license/thomas-vilte/dave-go)](https://github.com/thomas-vilte/dave-go/blob/main/LICENSE)
 [![Go Reference](https://pkg.go.dev/badge/github.com/thomas-vilte/dave-go.svg)](https://pkg.go.dev/github.com/thomas-vilte/dave-go)
 [![CI](https://github.com/thomas-vilte/dave-go/actions/workflows/go.yml/badge.svg)](https://github.com/thomas-vilte/dave-go/actions/workflows/go.yml)
 
@@ -38,7 +38,7 @@ import (
 voice.WithDaveSessionCreateFunc(session.New)
 ```
 
-There is also a small `disgo` voice example in [`examples/voice`](https://github.com/thomas-vilte/dave-go/tree/master/examples/voice).
+There is also a small `disgo` voice example in [`examples/voice`](https://github.com/thomas-vilte/dave-go/tree/main/examples/voice).
 
 ## Packages
 
