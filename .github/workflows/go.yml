@@ -7,38 +7,88 @@ on:
       - '**/go.mod'
       - '**/go.sum'
       - '.github/workflows/go.yml'
-
   push:
+    branches:
+      - main
     paths:
       - '**/*.go'
       - '**/go.mod'
       - '**/go.sum'
       - '.github/workflows/go.yml'
 
+# Cancel in-progress runs for the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
-# The if of each job prevents running the workflow if it's from a pull request from the directory the pull request is targeted towards
-# as it will already run on 'push'
+# Least-privilege: jobs only need to read the repo contents.
+permissions:
+  contents: read
+
 jobs:
+  # The if guard skips the duplicate run that a PR from a branch in this same
+  # repo would trigger, since the 'push' event already covers it.
   test:
     if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - .
+          - examples/voice
     steps:
+      - uses: actions/checkout@v6
+
       - uses: actions/setup-go@v6
         with:
-          go-version: 1.26
-      - uses: actions/checkout@v6
-      - name: go test
-        run: go test -v ./...
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: Verify go.mod is tidy
+        working-directory: ${{ matrix.module }}
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Build
+        working-directory: ${{ matrix.module }}
+        run: go build ./...
+
+      - name: Vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+
+      - name: Test (race + coverage)
+        working-directory: ${{ matrix.module }}
+        run: go test -v -race -shuffle=on -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ strategy.job-index }}
+          path: ${{ matrix.module }}/coverage.out
+          if-no-files-found: ignore
 
   golangci:
     if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - .
+          - examples/voice
     steps:
+      - uses: actions/checkout@v6
+
       - uses: actions/setup-go@v6
         with:
-          go-version: 1.26
-      - uses: actions/checkout@v6
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
           version: latest
+          working-directory: ${{ matrix.module }}
