@@ -1,4 +1,4 @@
-// AES-128-GCM with a tag truncated to 64 bits (8 bytes).
+// Package frame implements AES-128-GCM with a tag truncated to 64 bits (8 bytes).
 //
 // Go's standard library only supports 12-16 byte tags via cipher.NewGCMWithTagSize.
 // DAVE requires 8-byte tags per protocol.md "Truncated authentication tag":
@@ -33,6 +33,7 @@ func newGCM8(key []byte) (cipher.AEAD, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gcm: %w", err)
 	}
+
 	return &gcm8{inner: inner}, nil
 }
 
@@ -50,6 +51,7 @@ func (g *gcm8) Seal(dst, nonce, plaintext, aad []byte) []byte {
 	// sealed = dst + ciphertext + tag(16 bytes)
 	// Truncate tag to 8 bytes
 	tagStart := len(sealed) - 16
+
 	return append(sealed[:tagStart], sealed[tagStart:tagStart+8]...)
 }
 
@@ -95,6 +97,7 @@ func constantTimeEqual(a, b []byte) bool {
 	for i := range a {
 		diff |= a[i] ^ b[i]
 	}
+
 	return diff == 0
 }
 

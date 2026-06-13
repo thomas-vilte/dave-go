@@ -61,6 +61,7 @@ func NewKeyRatchet(baseSecret []byte, opts ...Option) (*KeyRatchet, error) {
 func (r *KeyRatchet) CurrentGeneration() uint32 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return r.generation
 }
 
@@ -68,14 +69,17 @@ func (r *KeyRatchet) GetKey(target uint32) ([]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.pruneExpiredLocked()
-	if target < r.generation {
-		cached, ok := r.cache[target]
-		if !ok {
-			return nil, ErrGenerationExpired
-		}
+	// The current generation is the per-packet hot path: serve it from the
+	// cache like the previous ones so each frame doesn't redo the HKDF
+	// derivation.
+	if cached, ok := r.cache[target]; ok {
 		out := make([]byte, len(cached.key))
 		copy(out, cached.key)
+
 		return out, nil
+	}
+	if target < r.generation {
+		return nil, ErrGenerationExpired
 	}
 	for r.generation < target {
 		currentKey, err := deriveKeyForGeneration(r.secret, r.generation)
@@ -98,7 +102,14 @@ func (r *KeyRatchet) GetKey(target uint32) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return key, nil
+	r.cache[target] = cachedGeneration{
+		key:       key,
+		expiresAt: r.now().Add(r.retentionTTL),
+	}
+	out := make([]byte, len(key))
+	copy(out, key)
+
+	return out, nil
 }
 
 func (r *KeyRatchet) PruneExpired() {
@@ -106,6 +117,7 @@ func (r *KeyRatchet) PruneExpired() {
 	defer r.mu.Unlock()
 	r.pruneExpiredLocked()
 }
+
 func (r *KeyRatchet) pruneExpiredLocked() {
 	now := r.now()
 	for generation, cached := range r.cache {
@@ -126,8 +138,10 @@ func deriveKeyForGeneration(secret *ciphersuite.Secret, generation uint32) ([]by
 	if err != nil {
 		return nil, fmt.Errorf("derive generation key %d: %w", generation, err)
 	}
+
 	return key.AsSlice(), nil
 }
+
 func advanceSecret(secret *ciphersuite.Secret, generation uint32) (*ciphersuite.Secret, error) {
 	context := make([]byte, 4)
 	binary.BigEndian.PutUint32(context, generation)
@@ -138,8 +152,10 @@ func advanceSecret(secret *ciphersuite.Secret, generation uint32) (*ciphersuite.
 	if err != nil {
 		return nil, fmt.Errorf("advance generation %d: %w", generation, err)
 	}
+
 	return next, nil
 }
+
 func zeroBytes(b []byte) {
 	for i := range b {
 		b[i] = 0

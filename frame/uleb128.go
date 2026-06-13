@@ -3,19 +3,19 @@ package frame
 import "fmt"
 
 func EncodeULEB128(value uint32) []byte {
-	if value == 0 {
-		return []byte{0}
-	}
-	var buf [5]byte
-	n := 0
+	return appendULEB128(make([]byte, 0, 5), value)
+}
+
+// appendULEB128 appends the ULEB128 encoding of value to dst and returns the
+// extended slice. Unlike EncodeULEB128, it doesn't allocate when dst has
+// spare capacity (e.g. a stack-backed array in a hot path).
+func appendULEB128(dst []byte, value uint32) []byte {
 	for value >= 0x80 {
-		buf[n] = 0x80 | byte(value&0x7F)
-		n++
+		dst = append(dst, 0x80|byte(value&0x7F))
 		value >>= 7
 	}
-	buf[n] = byte(value)
-	n++
-	return buf[:n]
+
+	return append(dst, byte(value))
 }
 
 func DecodeULEB128(data []byte) (value uint32, n int, err error) {
@@ -35,5 +35,6 @@ func DecodeULEB128(data []byte) (value uint32, n int, err error) {
 			return 0, 0, fmt.Errorf("uleb128 overflow: %w", ErrInvalidULEB128)
 		}
 	}
+
 	return 0, 0, fmt.Errorf("truncated uleb128: %w", ErrInvalidULEB128)
 }

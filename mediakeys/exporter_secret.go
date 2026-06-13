@@ -9,9 +9,15 @@ import (
 // ExportWithMLSExporterSecret derives application secret material directly from
 // an MLS exporter secret using the label/context construction expected by
 // Discord's DAVE reference implementations.
-func ExportWithMLSExporterSecret(exporterSecret *ciphersuite.Secret, cs ciphersuite.CipherSuite, label string, context []byte, length int) ([]byte, error) {
+func ExportWithMLSExporterSecret(
+	exporterSecret *ciphersuite.Secret,
+	cs ciphersuite.CipherSuite,
+	label string,
+	context []byte,
+	length int,
+) ([]byte, error) {
 	if exporterSecret == nil {
-		return nil, fmt.Errorf("exporter_secret is nil")
+		return nil, ErrNilExporterSecret
 	}
 
 	derivedSecret, err := exporterSecret.DeriveSecret(cs, label)

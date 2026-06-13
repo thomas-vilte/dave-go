@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/disgoorg/godave"
-
 	"github.com/thomas-vilte/dave-go/codecs"
 	"github.com/thomas-vilte/dave-go/frame"
 	"github.com/thomas-vilte/dave-go/mediakeys"
@@ -68,6 +67,14 @@ type session struct {
 	preCommitGroupState []byte
 
 	epochReady chan struct{}
+
+	// recoveryAttempts counts consecutive invalidate → new key package cycles
+	// without an activated epoch; bounded by maxRecoveryAttempts.
+	recoveryAttempts int
+	recoveryTimeout  time.Duration
+
+	stats         Stats
+	degradedSince time.Time
 }
 
 type epochState struct {
@@ -88,13 +95,14 @@ func New(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) 
 	}
 
 	return &session{
-		logger:      logger,
-		userID:      userID,
-		callbacks:   callbacks,
-		ssrcCodecs:  make(map[uint32]codecs.Kind),
-		users:       make(map[godave.UserID]struct{}),
-		sendCounter: mediakeys.NewNonceCounter(),
-		epochReady:  make(chan struct{}),
+		logger:          logger,
+		userID:          userID,
+		callbacks:       callbacks,
+		ssrcCodecs:      make(map[uint32]codecs.Kind),
+		users:           make(map[godave.UserID]struct{}),
+		sendCounter:     mediakeys.NewNonceCounter(),
+		epochReady:      make(chan struct{}),
+		recoveryTimeout: epochRecoveryTimeout,
 	}
 }
 
@@ -142,13 +150,15 @@ func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 	_, ok := s.ssrcCodecs[ssrc]
 	s.mu.RUnlock()
 	if !ok {
-		return 0, fmt.Errorf("no codec assigned for ssrc %d", ssrc)
+		return 0, fmt.Errorf("%w: %d", ErrNoCodecForSSRC, ssrc)
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.activeEpoch == nil || s.sendRatchet == nil {
+		s.stats.EncryptFailures++
+
 		return 0, fmt.Errorf("session: %w", ErrNoActiveEpoch)
 	}
 
@@ -166,32 +176,34 @@ func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 	// Reuse the AES-GCM cipher if the key hasn't changed (hot path: same generation).
 	// The ratchet key changes every ~16 frames; recreation is infrequent.
 	if !bytes.Equal(s.sendCipherKey, key) {
-		newCipher, err := frame.NewGCM8(key)
-		if err != nil {
-			return 0, fmt.Errorf("cipher creation: %w", err)
+		newCipher, cipherErr := frame.NewGCM8(key)
+		if cipherErr != nil {
+			return 0, fmt.Errorf("cipher creation: %w", cipherErr)
 		}
 		s.sendCipher = newCipher
 		s.sendCipherKey = append(s.sendCipherKey[:0], key...)
 	}
 
 	// H264/H265 may need to retry with nonce+1 if the output contains start code sequences.
-	// That path reconstructs the cipher internally, so fall back to Encrypt for those codecs.
-	var encrypted []byte
+	// That path reconstructs the cipher internally, so fall back to EncryptInto for those codecs.
+	var n int
 	if kind == codecs.CodecH264 || kind == codecs.CodecH265 {
-		encrypted, err = codecs.Encrypt(kind, frameData, key, truncatedNonce)
+		n, err = codecs.EncryptInto(kind, encryptedFrame, frameData, key, truncatedNonce)
 	} else {
-		encrypted, err = codecs.EncryptWithCipher(kind, frameData, s.sendCipher, truncatedNonce)
+		n, err = codecs.EncryptWithCipherInto(kind, encryptedFrame, frameData, s.sendCipher, truncatedNonce)
 	}
 	if err != nil {
 		return 0, err
 	}
 
-	s.logger.Debug("frame encrypted", "ssrc", ssrc, "epoch", s.activeEpoch.id, "nonce", fullNonce, "generation", generation, "plaintext_size", len(frameData), "encrypted_size", len(encrypted))
+	s.logger.Debug("frame encrypted",
+		"ssrc", ssrc,
+		"epoch", s.activeEpoch.id,
+		"nonce", fullNonce,
+		"generation", generation,
+		"plaintext_size", len(frameData),
+		"encrypted_size", n)
 
-	if cap(encryptedFrame) < len(encrypted) {
-		return 0, fmt.Errorf("encrypted frame buffer too small: need %d, have %d", len(encrypted), cap(encryptedFrame))
-	}
-	n := copy(encryptedFrame[:len(encrypted)], encrypted)
 	return n, nil
 }
 
@@ -205,6 +217,7 @@ func (s *session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 
 	if !frame.LooksLikeDAVEFrame(frameData) {
 		n := copy(decryptedFrame, frameData)
+
 		return n, nil
 	}
 
@@ -239,6 +252,7 @@ func (s *session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 		key, err := sender.ratchet.GetKey(generation)
 		if err != nil {
 			lastErr = err
+
 			continue
 		}
 
@@ -248,16 +262,19 @@ func (s *session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 		})
 		if err != nil {
 			lastErr = err
+
 			continue
 		}
 
 		n := copy(decryptedFrame, plaintext)
+
 		return n, nil
 	}
 
 	if lastErr != nil {
 		return 0, lastErr
 	}
+
 	return 0, ErrDecryptionFailed
 }
 
@@ -359,7 +376,10 @@ func (s *session) OnDaveMLSProposals(proposals []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastProposalBatch = append([]byte(nil), proposals...)
-	s.logger.Debug("[DAVE] OnDaveMLSProposals", "size", len(proposals), "group_id", fmt.Sprintf("%x", s.groupID), "has_group", len(s.groupID) > 0)
+	s.logger.Debug("[DAVE] OnDaveMLSProposals",
+		"size", len(proposals),
+		"group_id", fmt.Sprintf("%x", s.groupID),
+		"has_group", len(s.groupID) > 0)
 
 	// If a pendingEpoch is already waiting for ExecuteTransition, queue this
 	// batch instead of committing immediately. Committing again would advance
@@ -368,6 +388,7 @@ func (s *session) OnDaveMLSProposals(proposals []byte) {
 	if s.pendingEpoch != nil {
 		s.logger.Debug("[DAVE] OnDaveMLSProposals: pendingEpoch in flight, queuing proposals", "queue_len", len(s.proposalQueue)+1)
 		s.proposalQueue = append(s.proposalQueue, append([]byte(nil), proposals...))
+
 		return
 	}
 
@@ -379,36 +400,86 @@ func (s *session) OnDaveMLSProposals(proposals []byte) {
 func (s *session) processAndCommitProposalBatchLocked(proposals []byte) {
 	if err := s.ensureMLSClientLocked(); err != nil {
 		s.logger.Error("failed to init mls client", "error", err)
+
 		return
 	}
 	if err := s.processProposalBatchLocked(proposals); err != nil {
 		s.logger.Error("failed to process proposals", "error", err, "size", len(proposals))
+
 		return
 	}
 	if len(s.groupID) == 0 {
 		s.logger.Warn("[DAVE] OnDaveMLSProposals: no group after processing proposals, skipping commit")
+
 		return
 	}
 	if err := s.commitProposalsLocked(); err != nil {
 		s.logger.Error("failed to commit proposals", "error", err)
+
 		return
 	}
-	s.logger.Info("mls proposals processed and committed", "size", len(proposals), "pending_epoch_set", s.pendingEpoch != nil, "pending_epoch_id", func() uint64 {
-		if s.pendingEpoch != nil {
-			return s.pendingEpoch.id
+	s.logger.Info("mls proposals processed and committed",
+		"size", len(proposals),
+		"pending_epoch_set", s.pendingEpoch != nil,
+		"pending_epoch_id", func() uint64 {
+			if s.pendingEpoch != nil {
+				return s.pendingEpoch.id
+			}
+
+			return 0
+		}())
+}
+
+// reconcileCompetingCommitLocked handles the case where the DS echoed a commit
+// that is not ours: it rolls back any pending (lost) commit to the pre-commit
+// snapshot and then processes the winning commit. It returns false if the
+// transition must be aborted because the state restore or the commit processing
+// failed. Must be called with s.mu held.
+func (s *session) reconcileCompetingCommitLocked(transitionID uint16, commitMessage []byte) bool {
+	if s.pendingEpoch != nil {
+		// Our commit lost; restore pre-commit state before processing the winner.
+		s.logger.Debug("[DAVE] OnDaveMLSPrepareCommitTransition: competing commit won, rolling back",
+			"transition_id", transitionID,
+			"our_commit_size", len(s.pendingCommitBytes),
+			"winning_commit_size", len(commitMessage))
+		if err := s.restorePreCommitStateLocked(); err != nil {
+			s.logger.Error("failed to restore pre-commit state", "transition_id", transitionID, "error", err)
+			if s.callbacks != nil {
+				_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
+			}
+
+			return false
 		}
-		return 0
-	}())
+	}
+
+	if err := s.processCommitLocked(commitMessage); err != nil {
+		s.stats.CommitsFailed++
+		s.logger.Error("failed to process commit", "transition_id", transitionID, "error", err)
+		if s.callbacks != nil {
+			_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
+		}
+		s.invalidateAndResendKeyPackageLocked()
+
+		return false
+	}
+	s.stats.CommitsProcessed++
+
+	return true
 }
 
 func (s *session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMessage []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.logger.Debug("[DAVE] OnDaveMLSPrepareCommitTransition", "transition_id", transitionID, "commit_size", len(commitMessage), "pending_epoch_set", s.pendingEpoch != nil, "commit_hex_prefix", fmt.Sprintf("%x", commitMessage[:minInt(32, len(commitMessage))]))
+	s.logger.Debug("[DAVE] OnDaveMLSPrepareCommitTransition",
+		"transition_id", transitionID,
+		"commit_size", len(commitMessage),
+		"pending_epoch_set", s.pendingEpoch != nil,
+		"commit_hex_prefix", fmt.Sprintf("%x", commitMessage[:minInt(32, len(commitMessage))]))
 	s.pendingTransitionID = transitionID
 	if err := s.ensureMLSClientLocked(); err != nil {
 		s.logger.Error("failed to init mls client", "error", err)
+
 		return
 	}
 
@@ -423,29 +494,8 @@ func (s *session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMe
 		s.logger.Debug("skipping commit re-processing: we were the committer", "transition_id", transitionID)
 		s.pendingCommitBytes = nil
 		s.preCommitGroupState = nil
-	} else {
-		if s.pendingEpoch != nil {
-			// Our commit lost; restore pre-commit state before processing the winner.
-			s.logger.Debug("[DAVE] OnDaveMLSPrepareCommitTransition: competing commit won, rolling back",
-				"transition_id", transitionID,
-				"our_commit_size", len(s.pendingCommitBytes),
-				"winning_commit_size", len(commitMessage))
-			if err := s.restorePreCommitStateLocked(); err != nil {
-				s.logger.Error("failed to restore pre-commit state", "transition_id", transitionID, "error", err)
-				if s.callbacks != nil {
-					_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
-				}
-				return
-			}
-		}
-		if err := s.processCommitLocked(commitMessage); err != nil {
-			s.logger.Error("failed to process commit", "transition_id", transitionID, "error", err)
-			if s.callbacks != nil {
-				_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
-			}
-			s.invalidateAndResendKeyPackageLocked()
-			return
-		}
+	} else if !s.reconcileCompetingCommitLocked(transitionID, commitMessage) {
+		return
 	}
 
 	if s.callbacks != nil {
@@ -481,6 +531,7 @@ func (s *session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
 			if s.callbacks != nil {
 				_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
 			}
+
 			return
 		}
 		// Also clear the proposal queue — those proposals were committed against
@@ -490,23 +541,30 @@ func (s *session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
 
 	if err := s.ensureMLSClientLocked(); err != nil {
 		s.logger.Error("failed to init mls client", "error", err)
+
 		return
 	}
 
 	if err := s.joinPendingWelcomeLocked(welcomeMessage); err != nil {
+		s.stats.WelcomesFailed++
 		s.logger.Error("failed to join welcome", "transition_id", transitionID, "error", err)
 		if s.callbacks != nil {
 			_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
 		}
 		s.invalidateAndResendKeyPackageLocked()
+
 		return
 	}
-	s.logger.Debug("[DAVE] OnDaveMLSWelcome: joined successfully", "pending_epoch_set", s.pendingEpoch != nil, "pending_epoch_id", func() uint64 {
-		if s.pendingEpoch != nil {
-			return s.pendingEpoch.id
-		}
-		return 0
-	}())
+	s.stats.WelcomesJoined++
+	s.logger.Debug("[DAVE] OnDaveMLSWelcome: joined successfully",
+		"pending_epoch_set", s.pendingEpoch != nil,
+		"pending_epoch_id", func() uint64 {
+			if s.pendingEpoch != nil {
+				return s.pendingEpoch.id
+			}
+
+			return 0
+		}())
 
 	if s.callbacks != nil {
 		if err := s.callbacks.SendReadyForTransition(transitionID); err != nil {

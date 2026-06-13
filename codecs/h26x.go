@@ -21,7 +21,7 @@ const maxH26xRetries = 10
 //
 // Reference: protocol.md "H264 & H265":
 // "If a start code sequence is encountered the nonce is incremented and
-// encryption is re-attempted"
+// encryption is re-attempted".
 func encryptH26x(kind Kind, plaintext, key []byte, baseNonce uint32) ([]byte, error) {
 	ranges, err := h26xRanges(kind, plaintext)
 	if err != nil {
@@ -29,7 +29,7 @@ func encryptH26x(kind Kind, plaintext, key []byte, baseNonce uint32) ([]byte, er
 	}
 
 	var lastResult []byte
-	for attempt := 0; attempt < maxH26xRetries; attempt++ {
+	for attempt := range maxH26xRetries {
 		nonce := nonceForEncryption(baseNonce, attempt)
 		encrypted, err := frame.Encrypt(frame.EncryptParams{
 			Plaintext:         plaintext,
@@ -58,6 +58,43 @@ func encryptH26x(kind Kind, plaintext, key []byte, baseNonce uint32) ([]byte, er
 	return lastResult, nil
 }
 
+// encryptH26xInto is the EncryptInto/EncryptWithCipherInto counterpart of
+// encryptH26x: same nonce-retry loop, writing the result into dst instead of
+// allocating a new slice.
+func encryptH26xInto(kind Kind, dst, plaintext, key []byte, baseNonce uint32) (int, error) {
+	ranges, err := h26xRanges(kind, plaintext)
+	if err != nil {
+		return 0, err
+	}
+
+	var n int
+	for attempt := range maxH26xRetries {
+		nonce := nonceForEncryption(baseNonce, attempt)
+		n, err = frame.EncryptInto(dst, frame.EncryptParams{
+			Plaintext:         plaintext,
+			Key:               key,
+			TruncatedNonce:    nonce,
+			UnencryptedRanges: ranges,
+		})
+		if err != nil {
+			return 0, err
+		}
+
+		// Same collision check as encryptH26x: exclude unencrypted ranges
+		// (they legitimately contain start codes by design).
+		interleavedFrame := dst[:len(plaintext)]
+		ciphertextBytes := frame.ExtractCiphertext(interleavedFrame, ranges)
+		footer := dst[len(plaintext):n]
+
+		if !hasStartCodeSequence(ciphertextBytes) && !hasStartCodeSequence(footer) {
+			return n, nil
+		}
+	}
+
+	// If we ran out of retries, return the last result we have.
+	return n, nil
+}
+
 // h26xRanges determines the unencrypted ranges for H264 and H265 frames.
 //
 // Process:
@@ -74,7 +111,7 @@ func encryptH26x(kind Kind, plaintext, key []byte, baseNonce uint32) ([]byte, er
 // Reference: protocol.md "H264 & H265":
 // "Fully encrypt the payload of any Video Coding Layer (VCL) NAL unit"
 // "Leave unencrypted portions of non-VCL NAL units that are read by the
-// packetizer/depacketizer"
+// packetizer/depacketizer".
 func h26xRanges(kind Kind, payload []byte) ([]frame.Range, error) {
 	if len(payload) == 0 {
 		return nil, nil
@@ -115,7 +152,7 @@ func h26xRanges(kind Kind, payload []byte) ([]frame.Range, error) {
 		// VCL NAL units contain video data and get fully encrypted
 		// H264: types 1-5 are VCL
 		// H265: types 0-31 are VCL (BLA, CRA, IDR, etc.)
-		isVCL := false
+		var isVCL bool
 		if kind == CodecH264 {
 			isVCL = nalType >= 1 && nalType <= 5
 		} else {
@@ -151,6 +188,7 @@ func findNextStartCode(payload []byte, from int) int {
 			return i
 		}
 	}
+
 	return -1
 }
 
@@ -159,7 +197,7 @@ func findNextStartCode(payload []byte, from int) int {
 //
 // Reference: protocol.md "H264 & H265":
 // "If a start code sequence is encountered the nonce is incremented and
-// encryption is re-attempted"
+// encryption is re-attempted".
 func hasStartCodeSequence(data []byte) bool {
 	return bytes.Contains(data, []byte{0x00, 0x00, 0x01}) ||
 		bytes.Contains(data, []byte{0x00, 0x00, 0x00, 0x01})

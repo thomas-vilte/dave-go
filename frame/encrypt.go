@@ -25,7 +25,27 @@ func EncryptWithCipher(params EncryptWithCipherParams) ([]byte, error) {
 	if err := ValidateRanges(params.UnencryptedRanges, len(params.Plaintext)); err != nil {
 		return nil, err
 	}
-	return encryptCore(params.Cipher, params.Plaintext, params.TruncatedNonce, params.UnencryptedRanges)
+
+	return encryptCoreAppend(nil, params.Cipher, params.Plaintext, params.TruncatedNonce, params.UnencryptedRanges)
+}
+
+// EncryptWithCipherInto is like EncryptWithCipher but writes the encrypted
+// frame into dst and returns the number of bytes written, instead of
+// allocating a new slice.
+//
+// When params.UnencryptedRanges is empty (e.g. OPUS) and
+// cap(dst) >= len(params.Plaintext)+16, the AES-GCM seal writes directly into
+// dst's backing array and this call performs zero heap allocations. dst and
+// params.Plaintext must not overlap.
+func EncryptWithCipherInto(dst []byte, params EncryptWithCipherParams) (int, error) {
+	if params.Cipher == nil {
+		return 0, fmt.Errorf("cipher nil: %w", ErrInvalidKeyLength)
+	}
+	if err := ValidateRanges(params.UnencryptedRanges, len(params.Plaintext)); err != nil {
+		return 0, err
+	}
+
+	return encryptInto(dst, params.Cipher, params.Plaintext, params.TruncatedNonce, params.UnencryptedRanges)
 }
 
 // Encrypt encrypts a media frame following the DAVE format.
@@ -41,7 +61,7 @@ func EncryptWithCipher(params EncryptWithCipherParams) ([]byte, error) {
 //     with ciphertext
 //  7. Builds the footer: tag(8) + nonce(ULEB128) + ranges(ULEB128 pairs) + supplSize + 0xFAFA
 //
-// Reference: protocol.md "Payload Format", "Interleaved protocol media frame"
+// Reference: protocol.md "Payload Format", "Interleaved protocol media frame".
 func Encrypt(params EncryptParams) ([]byte, error) {
 	if len(params.Key) != 16 {
 		return nil, ErrInvalidKeyLength
@@ -55,28 +75,74 @@ func Encrypt(params EncryptParams) ([]byte, error) {
 		return nil, err
 	}
 
-	return encryptCore(gcm, params.Plaintext, params.TruncatedNonce, params.UnencryptedRanges)
+	return encryptCoreAppend(nil, gcm, params.Plaintext, params.TruncatedNonce, params.UnencryptedRanges)
 }
 
-// encryptCore is the shared implementation used by both Encrypt and EncryptWithCipher.
-func encryptCore(gcm cipher.AEAD, plaintext []byte, truncatedNonce uint32, unencryptedRanges []Range) ([]byte, error) {
+// EncryptInto is like Encrypt but writes the encrypted frame into dst and
+// returns the number of bytes written, instead of allocating a new slice.
+//
+// When params.UnencryptedRanges is empty (e.g. OPUS) and
+// cap(dst) >= len(params.Plaintext)+16, the AES-GCM seal writes directly into
+// dst's backing array and this call performs zero heap allocations. dst and
+// params.Plaintext must not overlap.
+func EncryptInto(dst []byte, params EncryptParams) (int, error) {
+	if len(params.Key) != 16 {
+		return 0, ErrInvalidKeyLength
+	}
+	if err := ValidateRanges(params.UnencryptedRanges, len(params.Plaintext)); err != nil {
+		return 0, err
+	}
+
+	gcm, err := newGCM8(params.Key)
+	if err != nil {
+		return 0, err
+	}
+
+	return encryptInto(dst, gcm, params.Plaintext, params.TruncatedNonce, params.UnencryptedRanges)
+}
+
+// encryptInto fills dst[:0] via encryptCoreAppend and copies the result back
+// into dst, returning the number of bytes written. If dst has enough spare
+// capacity, encryptCoreAppend writes directly into dst's backing array and
+// the final copy is a self-copy (no allocation, no data movement).
+func encryptInto(dst []byte, gcm cipher.AEAD, plaintext []byte, truncatedNonce uint32, unencryptedRanges []Range) (int, error) {
+	out, err := encryptCoreAppend(dst[:0], gcm, plaintext, truncatedNonce, unencryptedRanges)
+	if err != nil {
+		return 0, err
+	}
+	if len(out) > cap(dst) {
+		return 0, fmt.Errorf("%w: need %d, have %d", ErrBufferTooSmall, len(out), cap(dst))
+	}
+
+	return copy(dst[:len(out)], out), nil
+}
+
+// encryptCoreAppend appends an encrypted DAVE frame to dst and returns the
+// extended slice. dst is typically dst[:0] of a caller-owned buffer (see
+// encryptInto) or nil to always allocate.
+//
+// For the no-ranges case (OPUS, VP9), gcm.Seal writes ciphertext+tag directly
+// into dst's spare capacity, and the ULEB128-encoded nonce is built on the
+// stack, so this performs a single small allocation (the 12-byte nonce array,
+// which escapes because gcm.Seal is an interface method call) as long as
+// cap(dst) >= len(plaintext)+16 — down from the ~3 allocations and 2 copies
+// of the original implementation.
+func encryptCoreAppend(dst []byte, gcm cipher.AEAD, plaintext []byte, truncatedNonce uint32, unencryptedRanges []Range) ([]byte, error) {
 	var nonce [12]byte
 	binary.LittleEndian.PutUint32(nonce[8:], truncatedNonce)
 
+	var nonceBuf [5]byte
+	nonceBytes := appendULEB128(nonceBuf[:0], truncatedNonce)
+
 	if len(unencryptedRanges) == 0 {
-		sealed := gcm.Seal(nil, nonce[:], plaintext, nil)
-		ciphertextOut := sealed[:len(sealed)-8]
-		tag := sealed[len(sealed)-8:]
+		// gcm8.Seal returns dst extended by ciphertext+tag(8).
+		out := gcm.Seal(dst, nonce[:], plaintext, nil)
 
-		nonceBytes := EncodeULEB128(truncatedNonce)
 		supplSize := uint8(8 + len(nonceBytes) + 1 + 2)
-
-		out := make([]byte, 0, len(ciphertextOut)+int(supplSize))
-		out = append(out, ciphertextOut...)
-		out = append(out, tag...)
 		out = append(out, nonceBytes...)
 		out = append(out, supplSize)
 		out = append(out, 0xFA, 0xFA)
+
 		return out, nil
 	}
 
@@ -91,23 +157,21 @@ func encryptCore(gcm cipher.AEAD, plaintext []byte, truncatedNonce uint32, unenc
 	ciphertextOut := sealed[:len(sealed)-8]
 	tag := sealed[len(sealed)-8:]
 
-	out := buildInterleaved(plaintext, unencryptedRanges, ciphertextOut)
+	out := appendInterleaved(dst, plaintext, unencryptedRanges, ciphertextOut)
 	out = append(out, tag...)
-
-	nonceBytes := EncodeULEB128(truncatedNonce)
 	out = append(out, nonceBytes...)
 
-	var rangesData []byte
+	rangesStart := len(out)
 	for _, r := range unencryptedRanges {
-		rangesData = append(rangesData, EncodeULEB128(uint32(r.Offset))...)
-		rangesData = append(rangesData, EncodeULEB128(uint32(r.Length))...)
+		out = appendULEB128(out, uint32(r.Offset))
+		out = appendULEB128(out, uint32(r.Length))
 	}
-	out = append(out, rangesData...)
+	rangesLen := len(out) - rangesStart
 
 	// Suppl. Size covers all the supplemental content:
 	// tag(8) + nonce(ULEB128) + rangesData + this byte(1) + magic(2)
 	// Reference: protocol.md "Protocol supplemental data size"
-	supplSize := uint8(8 + len(nonceBytes) + len(rangesData) + 1 + 2)
+	supplSize := uint8(8 + len(nonceBytes) + rangesLen + 1 + 2)
 	out = append(out, supplSize)
 	out = append(out, 0xFA, 0xFA)
 
@@ -125,7 +189,7 @@ func encryptCore(gcm cipher.AEAD, plaintext []byte, truncatedNonce uint32, unenc
 //  6. Decrypts with AES-128-GCM, verifying the authentication tag
 //  7. Reconstructs the original plaintext by re-inserting the decrypted bytes into the encrypted positions
 //
-// Reference: protocol.md "Payload Format", "Protocol Frame Check"
+// Reference: protocol.md "Payload Format", "Protocol Frame Check".
 func Decrypt(params DecryptParams) ([]byte, uint32, error) {
 	if len(params.Key) != 16 {
 		return nil, 0, ErrInvalidKeyLength
@@ -157,8 +221,11 @@ func Decrypt(params DecryptParams) ([]byte, uint32, error) {
 	// AAD = unencrypted bytes from interleaved frame (same ones used in Encrypt)
 	aad := buildAAD(parsed.InterleavedFrame, parsed.UnencryptedRanges)
 
-	// Reconstruct the sealed message: ciphertext + tag
-	sealed := append(ciphertext, parsed.Tag...)
+	// Reconstruct the sealed message: ciphertext + tag. Build a fresh slice so we
+	// never append into ciphertext's backing array (which aliases the input frame).
+	sealed := make([]byte, 0, len(ciphertext)+len(parsed.Tag))
+	sealed = append(sealed, ciphertext...)
+	sealed = append(sealed, parsed.Tag...)
 	plaintext, err := gcm.Open(nil, nonce, sealed, aad)
 	if err != nil {
 		return nil, 0, err
@@ -166,6 +233,7 @@ func Decrypt(params DecryptParams) ([]byte, uint32, error) {
 
 	// Reconstruct original plaintext: insert decrypted bytes into encrypted positions
 	result := ReconstructPlaintext(parsed.InterleavedFrame, plaintext, parsed.UnencryptedRanges)
+
 	return result, parsed.TruncatedNonce, nil
 }
 
@@ -177,7 +245,7 @@ func Decrypt(params DecryptParams) ([]byte, uint32, error) {
 // but with 0 bytes of interleaved frame, the total minimum is 12.
 // We use 11 as a conservative threshold for the quick check.
 //
-// Reference: protocol.md "Protocol Frame Check"
+// Reference: protocol.md "Protocol Frame Check".
 func LooksLikeDAVEFrame(packet []byte) bool {
 	if len(packet) < 11 {
 		return false
@@ -185,6 +253,7 @@ func LooksLikeDAVEFrame(packet []byte) bool {
 	if packet[len(packet)-2] != 0xFA || packet[len(packet)-1] != 0xFA {
 		return false
 	}
+
 	return true
 }
 
@@ -195,15 +264,17 @@ func buildAAD(frame []byte, ranges []Range) []byte {
 	for _, r := range ranges {
 		aad = append(aad, frame[r.Offset:r.Offset+r.Length]...)
 	}
+
 	return aad
 }
 
-// buildInterleaved builds the interleaved frame by copying the original frame
-// and replacing the encrypted positions (outside unencrypted ranges) with the
-// corresponding ciphertext.
-func buildInterleaved(original []byte, ranges []Range, ciphertext []byte) []byte {
-	out := make([]byte, len(original))
-	copy(out, original)
+// appendInterleaved appends the interleaved frame to dst: a copy of the
+// original frame with the encrypted positions (outside unencrypted ranges)
+// replaced by the corresponding ciphertext.
+func appendInterleaved(dst []byte, original []byte, ranges []Range, ciphertext []byte) []byte {
+	start := len(dst)
+	dst = append(dst, original...)
+	out := dst[start:]
 
 	cipherPos := 0
 	last := 0
@@ -220,7 +291,8 @@ func buildInterleaved(original []byte, ranges []Range, ciphertext []byte) []byte
 	if last < len(original) {
 		copy(out[last:], ciphertext[cipherPos:])
 	}
-	return out
+
+	return dst
 }
 
 // Parse analyzes a complete DAVE frame and extracts its footer components.

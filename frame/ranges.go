@@ -12,7 +12,7 @@ package frame
 // Reference: protocol.md "Protocol Frame Check":
 // "Must be ordered by ascending range offset"
 // "Must be distinct and not overlapping"
-// "Must not overflow the total size of the interleaved media frame"
+// "Must not overflow the total size of the interleaved media frame".
 func ValidateRanges(ranges []Range, size int) error {
 	prevEnd := 0
 	for i, r := range ranges {
@@ -27,6 +27,7 @@ func ValidateRanges(ranges []Range, size int) error {
 		}
 		prevEnd = r.Offset + r.Length
 	}
+
 	return nil
 }
 
@@ -37,6 +38,7 @@ func ContiguousPlaintextSize(frameSize int, ranges []Range) int {
 	for _, r := range ranges {
 		size -= r.Length
 	}
+
 	return size
 }
 
@@ -71,6 +73,7 @@ func ReconstructPlaintext(interleaved []byte, decrypted []byte, ranges []Range) 
 	if last < len(interleaved) {
 		copy(out[last:], decrypted[cipherPos:])
 	}
+
 	return out
 }
 
@@ -94,5 +97,6 @@ func ExtractCiphertext(interleaved []byte, ranges []Range) []byte {
 	if last < len(interleaved) {
 		out = append(out, interleaved[last:]...)
 	}
+
 	return out
 }
