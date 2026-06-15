@@ -76,7 +76,7 @@ func (e exporterAdapter) Export(label string, ctx []byte, length int) ([]byte, e
 
 	exportPrefixLen := min(len(discordExport), 8)
 
-	slog.Default().Debug("[DAVE] exporter derivation",
+	slog.Default().Debug("exporter derivation",
 		"group_id", fmt.Sprintf("%x", e.groupID),
 		"label", label,
 		"context_prefix", hex.EncodeToString(ctx[:minInt(len(ctx), 8)]),
@@ -246,13 +246,13 @@ func readTLSVectorLength(data []byte) (uint32, int, error) {
 
 func (s *session) processProposalBatchLocked(proposals []byte) error {
 	if len(proposals) == 0 {
-		s.logger.Debug("[DAVE] processProposalBatchLocked: empty proposals")
+		s.logger.Debug("processProposalBatchLocked: empty proposals")
 
 		return nil
 	}
 	if len(s.groupID) == 0 {
 		// DAVE spec §5: if no local group exists, proposals are ignored.
-		s.logger.Debug("[DAVE] processProposalBatchLocked: no group, ignoring proposals")
+		s.logger.Debug("processProposalBatchLocked: no group, ignoring proposals")
 
 		return nil
 	}
@@ -265,10 +265,10 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 	}
 
 	operationType := proposals[0]
-	s.logger.Debug("[DAVE] processProposalBatchLocked", "operation_type", operationType, "total_size", len(proposals))
+	s.logger.Debug("processProposalBatchLocked", "operation_type", operationType, "total_size", len(proposals))
 	if operationType != 0 {
 		// revoke: not yet handled — ignore safely
-		s.logger.Debug("[DAVE] processProposalBatchLocked: revoke operation, ignoring")
+		s.logger.Debug("processProposalBatchLocked: revoke operation, ignoring")
 
 		return nil
 	}
@@ -285,7 +285,7 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 		return fmt.Errorf("%w: need %d bytes, have %d", ErrProposalsTruncated, end, len(payload))
 	}
 
-	s.logger.Debug("[DAVE] proposals vector parsed",
+	s.logger.Debug("proposals vector parsed",
 		"vec_len", vecLen,
 		"header_size", headerSize,
 		"payload_first_32", fmt.Sprintf("%x", payload[:minInt(32, len(payload))]),
@@ -297,7 +297,7 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 			return fmt.Errorf("%w: %d bytes", ErrProposalTooShort, len(remaining))
 		}
 		wireOriginal := remaining
-		s.logger.Debug("[DAVE] parsing proposal",
+		s.logger.Debug("parsing proposal",
 			"index", i,
 			"remaining_bytes", len(remaining),
 			"wire_hex", fmt.Sprintf("%x", remaining[:minInt(64, len(remaining))]))
@@ -319,7 +319,7 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 		remaining = remaining[len(wire):]
 	}
 
-	s.logger.Debug("[DAVE] processProposalBatchLocked: all proposals processed successfully")
+	s.logger.Debug("processProposalBatchLocked: all proposals processed successfully")
 
 	return nil
 }
@@ -365,7 +365,7 @@ func (s *session) rebuildEpochStateLocked(groupID []byte) (*epochState, error) {
 		}
 		generationZeroPreviewLen := min(len(generationZeroKey), 8)
 
-		s.logger.Debug("[DAVE] sender key material derived",
+		s.logger.Debug("sender key material derived",
 			"epoch_id", epochID,
 			"member_user_id", memberUserID,
 			"sender_id", senderID,
@@ -390,13 +390,35 @@ func minInt(a, b int) int {
 	return b
 }
 
+// markDegradedLocked records that the session can no longer encrypt and logs the
+// transition once. The matching "session recovered" line (markRecoveredLocked)
+// is logged when an epoch is next activated, so the pair brackets the outage in
+// the logs — useful to find exactly when and why a stuck session started failing.
+func (s *session) markDegradedLocked(reason string, args ...any) {
+	if !s.degradedSince.IsZero() {
+		return // already degraded: don't reset the clock or repeat the log
+	}
+	s.degradedSince = time.Now()
+	s.logger.Warn("session entering degraded state", append([]any{"reason", reason}, args...)...)
+}
+
+// markRecoveredLocked logs the recovery and clears the degraded clock if the
+// session had been degraded; no-op otherwise.
+func (s *session) markRecoveredLocked(epochID uint64) {
+	if s.degradedSince.IsZero() {
+		return
+	}
+	s.logger.Info("session recovered", "degraded_for", time.Since(s.degradedSince).String(), "epoch_id", epochID)
+	s.degradedSince = time.Time{}
+}
+
 func (s *session) activatePendingEpochLocked() {
-	s.logger.Debug("[DAVE] activatePendingEpochLocked called",
+	s.logger.Debug("activatePendingEpochLocked called",
 		"pending_epoch_set", s.pendingEpoch != nil,
 		"active_epoch_set", s.activeEpoch != nil,
 		"user_id", s.userID)
 	if s.pendingEpoch == nil {
-		s.logger.Warn("[DAVE] activatePendingEpochLocked: pendingEpoch is nil, no-op")
+		s.logger.Warn("no pending epoch to activate, no-op")
 
 		return
 	}
@@ -404,7 +426,7 @@ func (s *session) activatePendingEpochLocked() {
 	if s.activeEpoch != nil {
 		s.activeEpoch.expiresAt = time.Now().Add(epochRetention)
 		s.retainedEpoch = append(s.retainedEpoch, s.activeEpoch)
-		s.logger.Debug("[DAVE] activatePendingEpochLocked: retained previous active epoch", "old_epoch_id", s.activeEpoch.id)
+		s.logger.Debug("activatePendingEpochLocked: retained previous active epoch", "old_epoch_id", s.activeEpoch.id)
 	}
 
 	s.activeEpoch = s.pendingEpoch
@@ -416,21 +438,14 @@ func (s *session) activatePendingEpochLocked() {
 	if sender := s.activeEpoch.senders[s.userID]; sender != nil {
 		s.sendRatchet = sender.ratchet
 		s.recoveryAttempts = 0
-		if !s.degradedSince.IsZero() {
-			s.logger.Info("[DAVE] session recovered", "degraded_for", time.Since(s.degradedSince).String(), "epoch_id", s.activeEpoch.id)
-			s.degradedSince = time.Time{}
-		}
+		s.markRecoveredLocked(s.activeEpoch.id)
 		s.signalEpochReadyLocked()
-		s.logger.Debug("[DAVE] activatePendingEpochLocked: epoch activated",
+		s.logger.Debug("epoch activated",
 			"epoch_id", s.activeEpoch.id,
-			"sender_count", len(s.activeEpoch.senders),
-			"send_ratchet_set", true)
+			"sender_count", len(s.activeEpoch.senders))
 	} else {
 		s.sendRatchet = nil
-		if s.degradedSince.IsZero() {
-			s.degradedSince = time.Now()
-		}
-		s.logger.Warn("[DAVE] activatePendingEpochLocked: epoch activated but NO send ratchet (self not in senders map)",
+		s.markDegradedLocked("epoch activated but self not in senders map",
 			"epoch_id", s.activeEpoch.id,
 			"sender_count", len(s.activeEpoch.senders))
 	}
@@ -447,7 +462,7 @@ func (s *session) drainProposalQueueLocked() {
 	for len(s.proposalQueue) > 0 && s.pendingEpoch == nil {
 		next := s.proposalQueue[0]
 		s.proposalQueue = s.proposalQueue[1:]
-		s.logger.Debug("[DAVE] draining queued proposal batch", "size", len(next), "remaining_queue", len(s.proposalQueue))
+		s.logger.Debug("draining queued proposal batch", "size", len(next), "remaining_queue", len(s.proposalQueue))
 		s.processAndCommitProposalBatchLocked(next)
 	}
 }
@@ -536,9 +551,7 @@ func (s *session) invalidateAndResendKeyPackageLocked() {
 	s.preCommitGroupState = nil
 	s.proposalQueue = nil
 	s.pendingKeyPackage = nil
-	if s.degradedSince.IsZero() {
-		s.degradedSince = time.Now()
-	}
+	s.markDegradedLocked("invalid commit or welcome, MLS state reset")
 	// Fresh channel so the recovery watchdog waits for an epoch activated
 	// AFTER this invalidation, not one that was already active before.
 	s.resetEpochReadyLocked()
@@ -556,7 +569,7 @@ func (s *session) invalidateAndResendKeyPackageLocked() {
 // the failure. Must be called with s.mu held.
 func (s *session) watchRecoveryLocked() {
 	if s.recoveryAttempts >= maxRecoveryAttempts {
-		s.logger.Error("[DAVE] session did not recover after repeated invalidations; a full voice reconnect is required",
+		s.logger.Error("session did not recover after repeated invalidations; a full voice reconnect is required",
 			"attempts", s.recoveryAttempts)
 
 		return
@@ -583,7 +596,7 @@ func (s *session) watchRecoveryLocked() {
 			return
 		default:
 		}
-		s.logger.Warn("[DAVE] no epoch activated after invalidation, retrying recovery",
+		s.logger.Warn("no epoch activated after invalidation, retrying recovery",
 			"attempt", attempt, "transition_id", transitionID)
 		if s.callbacks != nil {
 			_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
@@ -593,7 +606,7 @@ func (s *session) watchRecoveryLocked() {
 }
 
 func (s *session) commitProposalsLocked() error {
-	s.logger.Debug("[DAVE] commitProposalsLocked: starting commit", "group_id", fmt.Sprintf("%x", s.groupID))
+	s.logger.Debug("commitProposalsLocked: starting commit", "group_id", fmt.Sprintf("%x", s.groupID))
 
 	// Snapshot the pre-commit group state. If Discord DS accepts a competing
 	// commit instead of ours, we restore this snapshot so processCommitLocked
@@ -620,8 +633,8 @@ func (s *session) commitProposalsLocked() error {
 		return fmt.Errorf("commit pending proposals: %w", err)
 	}
 
-	s.logger.Debug("[DAVE] commitProposalsLocked: commit created", "commit_size", len(commit), "welcome_size", len(welcome))
-	s.logger.Debug("[DAVE] commitProposalsLocked: commit hex", "commit_hex", fmt.Sprintf("%x", commit))
+	s.logger.Debug("commitProposalsLocked: commit created", "commit_size", len(commit), "welcome_size", len(welcome))
+	s.logger.Debug("commitProposalsLocked: commit hex", "commit_hex", fmt.Sprintf("%x", commit))
 
 	// CommitPendingProposals advances the local epoch immediately (MergeCommit).
 	// Pre-populate pendingEpoch so that when op 29 arrives (gateway echoes the commit
@@ -637,7 +650,7 @@ func (s *session) commitProposalsLocked() error {
 	s.pendingEpoch = epochState
 	s.pendingGroupID = append([]byte(nil), s.groupID...)
 
-	s.logger.Debug("[DAVE] commitProposalsLocked: pendingEpoch set",
+	s.logger.Debug("commitProposalsLocked: pendingEpoch set",
 		"epoch_id", epochState.id,
 		"sender_count", len(epochState.senders),
 		"has_self", func() bool {
@@ -664,11 +677,11 @@ func (s *session) commitProposalsLocked() error {
 	}
 
 	if s.callbacks == nil {
-		s.logger.Debug("[DAVE] commitProposalsLocked: no callbacks, skipping send")
+		s.logger.Debug("commitProposalsLocked: no callbacks, skipping send")
 
 		return nil
 	}
-	s.logger.Debug("[DAVE] commitProposalsLocked: sending commit/welcome to gateway", "payload_size", len(payload))
+	s.logger.Debug("commitProposalsLocked: sending commit/welcome to gateway", "payload_size", len(payload))
 	if err := s.callbacks.SendMLSCommitWelcome(payload); err != nil {
 		return err
 	}
@@ -691,7 +704,7 @@ func (s *session) commitProposalsLocked() error {
 		if s.pendingEpoch == nil {
 			return
 		}
-		s.logger.Warn("[DAVE] commit not confirmed by Discord, triggering recovery", "transition_id", transitionID)
+		s.logger.Warn("commit not confirmed by Discord, triggering recovery", "transition_id", transitionID)
 		if s.callbacks != nil {
 			_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
 		}
