@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v0.2.4] - 2026-06-15
+
+[v0.2.4]: https://github.com/thomas-vilte/dave-go/compare/v0.2.3...v0.2.4
+
+In this patch release, we focused on improving the visibility into system health and performance. We've enhanced our logging context and added better tracking for system degradation to help identify and resolve issues more efficiently.
+
+### 🛡️ Stability & Observability
+
+- We enhanced our logging context to provide more detailed insights, making it easier to troubleshoot issues.
+- We improved how we track system degradation to ensure better visibility into performance health.
+
 ## [v0.2.3] - 2026-06-13
 
 [v0.2.3]: https://github.com/thomas-vilte/dave-go/compare/v0.2.2...v0.2.3
