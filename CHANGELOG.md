@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v0.3.1] - 2026-06-27
+
+[v0.3.1]: https://github.com/thomas-vilte/dave-go/compare/v0.3.0...v0.3.1
+
+In this patch release, we focused on enhancing the reliability of our communication layers. We implemented a robust retry mechanism for MLS callbacks to ensure that transient failures do not disrupt your workflow.
+
+### 🛡️ Stability & Reliability
+
+- Introduced a retry mechanism for MLS callbacks to improve system resilience and ensure reliable data processing during transient network issues.
+
 ## [v0.3.0] - 2026-06-27
 
 [v0.3.0]: https://github.com/thomas-vilte/dave-go/compare/v0.2.4...v0.3.0
