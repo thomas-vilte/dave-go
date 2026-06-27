@@ -119,6 +119,37 @@ func New(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) 
 	}
 }
 
+// ReporterFunc receives a session's Reporter and the godave.Callbacks it was
+// created with, right after the session is created. It lets integrators observe
+// E2EE readiness/health (State/Stats) without type-asserting the godave.Session
+// later — e.g. to gate or pause playback. The callbacks is the voice connection,
+// so you can key the Reporter by guild/conn from it.
+type ReporterFunc func(Reporter, godave.Callbacks)
+
+// NewWithReporter returns a godave.SessionCreateFunc that creates a session and
+// hands its Reporter to report. Pass it straight to voice.WithDaveSessionCreateFunc
+// so the integrator gets the Reporter via a closure instead of capturing and
+// type-asserting the godave.Session by hand:
+//
+//	voice.WithDaveSessionCreateFunc(session.NewWithReporter(
+//		func(r session.Reporter, cb godave.Callbacks) {
+//			// stash r keyed by guild/conn so your OpusFrameProvider
+//			// can read r.State().Ready before feeding frames
+//		},
+//	))
+func NewWithReporter(report ReporterFunc) godave.SessionCreateFunc {
+	return func(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) godave.Session {
+		s := New(logger, userID, callbacks)
+		if report != nil {
+			if r, ok := s.(Reporter); ok {
+				report(r, callbacks)
+			}
+		}
+
+		return s
+	}
+}
+
 // newSessionID returns a short random hex id used to correlate every log line of
 // a single DAVE session. It's random rather than a counter so ids don't collide
 // across restarts or instances, and a move/recovery (which creates a fresh

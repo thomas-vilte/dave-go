@@ -14,6 +14,33 @@ func (testCallbacks) SendMLSCommitWelcome([]byte) error     { return nil }
 func (testCallbacks) SendReadyForTransition(uint16) error   { return nil }
 func (testCallbacks) SendInvalidCommitWelcome(uint16) error { return nil }
 
+// TestNewWithReporter verifies the create func hands the integrator a working
+// Reporter via the closure, so they don't have to type-assert the godave.Session.
+func TestNewWithReporter(t *testing.T) {
+	cb := testCallbacks{}
+	var gotReporter Reporter
+
+	createFunc := NewWithReporter(func(r Reporter, _ godave.Callbacks) {
+		gotReporter = r
+	})
+
+	s := createFunc(nil, "123456789", cb)
+	if s == nil {
+		t.Fatal("NewWithReporter create func returned nil")
+	}
+	if gotReporter == nil {
+		t.Fatal("reporter callback was not invoked with a Reporter")
+	}
+	if gotReporter.State().Ready {
+		t.Fatal("a fresh session should not report E2EE-ready")
+	}
+
+	// A nil report func must not panic.
+	if NewWithReporter(nil)(nil, "123456789", cb) == nil {
+		t.Fatal("NewWithReporter(nil) create func returned nil")
+	}
+}
+
 func TestNewSession(t *testing.T) {
 	s := New(nil, "test_user", testCallbacks{})
 	if s == nil {
