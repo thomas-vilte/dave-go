@@ -158,7 +158,7 @@ func (s *session) ensurePendingKeyPackageLocked() error {
 	s.pendingKeyPackage = append([]byte(nil), kp...)
 	if s.callbacks != nil {
 		// libdave sends the marshaled KeyPackage directly for opcode 26.
-		if err := s.callbacks.SendMLSKeyPackage(kp); err != nil {
+		if err := s.retrySend(func() error { return s.callbacks.SendMLSKeyPackage(kp) }); err != nil {
 			return fmt.Errorf("send mls key package: %w", err)
 		}
 	}
@@ -410,6 +410,43 @@ func (s *session) markRecoveredLocked(epochID uint64) {
 	}
 	s.logger.Info("session recovered", "degraded_for", time.Since(s.degradedSince).String(), "epoch_id", epochID)
 	s.degradedSince = time.Time{}
+}
+
+// activateSoleMemberEpochLocked transitions the bot to its own sole-member local
+// group, per the DAVE "Sole member reset" flow. When the last other member
+// leaves, the voice gateway recreates an unestablished group and sends
+// prepare_transition with transition_id 0 and no commit/welcome; the bot must
+// derive its own send ratchet from that group so it keeps encrypting alone.
+//
+// The cached external sender is reused to recreate the group when the gateway
+// did not resend it. If there is no external sender context (a protocol-version-0
+// session) this is a no-op and the session stays in passthrough. Must be called
+// with s.mu held.
+func (s *session) activateSoleMemberEpochLocked() {
+	if len(s.groupID) == 0 {
+		if len(s.externalSenderPackage) == 0 {
+			// No E2EE context yet (e.g. protocol version 0): stay in passthrough.
+			return
+		}
+		if err := s.createGroupWithExternalSenderLocked(); err != nil {
+			s.logger.Error("sole member reset: failed to recreate local group", "error", err)
+
+			return
+		}
+	}
+
+	if s.pendingEpoch == nil {
+		epochState, err := s.rebuildEpochStateLocked(s.groupID)
+		if err != nil {
+			s.logger.Error("sole member reset: failed to build epoch", "error", err)
+
+			return
+		}
+		s.pendingEpoch = epochState
+		s.pendingGroupID = append([]byte(nil), s.groupID...)
+	}
+
+	s.activatePendingEpochLocked()
 }
 
 func (s *session) activatePendingEpochLocked() {
@@ -682,7 +719,7 @@ func (s *session) commitProposalsLocked() error {
 		return nil
 	}
 	s.logger.Debug("commitProposalsLocked: sending commit/welcome to gateway", "payload_size", len(payload))
-	if err := s.callbacks.SendMLSCommitWelcome(payload); err != nil {
+	if err := s.retrySend(func() error { return s.callbacks.SendMLSCommitWelcome(payload) }); err != nil {
 		return err
 	}
 

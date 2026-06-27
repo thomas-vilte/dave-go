@@ -6,7 +6,9 @@ import "time"
 type State struct {
 	// EpochID is the active MLS epoch, 0 when none is active.
 	EpochID uint64
-	// Ready reports whether Encrypt can currently succeed.
+	// Ready reports whether frames are currently end-to-end encrypted. It is
+	// false while the session is in passthrough (no active epoch), e.g. a sole
+	// member before its epoch activates or a protocol-version-0 session.
 	Ready bool
 	// DegradedSince is when the session lost its epoch (zero while Ready,
 	// or if the session never degraded). Integrators can use it to stop
@@ -22,6 +24,9 @@ type Stats struct {
 	WelcomesFailed   uint64
 	RecoveryAttempts uint64
 	EncryptFailures  uint64
+	// PassthroughFrames counts frames forwarded unmodified because no E2EE epoch
+	// was active (sole member before activation, or a protocol-version-0 session).
+	PassthroughFrames uint64
 }
 
 // Reporter is implemented by sessions created with New. Integrators can
@@ -55,12 +60,12 @@ func (s *session) Stats() Stats {
 	return s.stats
 }
 
-// Ready reports whether the session can currently encrypt media frames. It is
-// part of the godave.Session interface; AudioSenders call it every frame to
-// hold playback while the MLS epoch is being established or recovered.
+// Ready reports whether the session can accept frames for Encrypt. It always
+// returns true: Encrypt never fails for lack of an epoch, it falls back to
+// passthrough so the audio stream keeps advancing even when the bot is alone or
+// mid-transition (per the DAVE spec, a sole member should still advance its
+// stream). Integrators that want to know whether frames are actually end-to-end
+// encrypted should read State (EpochID/Ready) rather than gate playback here.
 func (s *session) Ready() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return s.activeEpoch != nil && s.sendRatchet != nil
+	return true
 }
