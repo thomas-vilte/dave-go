@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v0.3.0] - 2026-06-27
+
+[v0.3.0]: https://github.com/thomas-vilte/dave-go/compare/v0.2.4...v0.3.0
+
+In this release, we focused on strengthening security and improving the reliability of our messaging infrastructure. We've added new encryption capabilities and implemented more resilient callback handling for the Messaging Layer Security (MLS) protocol.
+
+### 🔒 Security & Encryption
+
+- We implemented passthrough encryption to provide more robust data protection and privacy.
+- We added a sole member reset feature to improve management flexibility for individual group members.
+
+### 🛡️ Stability & Reliability
+
+- We introduced a retry mechanism for MLS callbacks to ensure more reliable and consistent communication handling.
+
 ## [v0.2.4] - 2026-06-15
 
 [v0.2.4]: https://github.com/thomas-vilte/dave-go/compare/v0.2.3...v0.2.4
