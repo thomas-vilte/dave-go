@@ -179,30 +179,33 @@ func (s *session) signalEpochReadyLocked() {
 }
 
 func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) (int, error) {
-	s.mu.RLock()
-	_, ok := s.ssrcCodecs[ssrc]
-	s.mu.RUnlock()
-	if !ok {
-		return 0, fmt.Errorf("%w: %d", ErrNoCodecForSSRC, ssrc)
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// No active E2EE epoch: forward the frame unmodified (passthrough) instead of
+	// failing, so the audio stream keeps advancing. This covers a sole member
+	// whose epoch has not activated yet and protocol-version-0 (transport-only)
+	// sessions. Receivers see no DAVE marker and pass it through too. Mirrors
+	// libdave's default passthrough mode (protocol.md "Passthrough Mode").
 	if s.activeEpoch == nil || s.sendRatchet == nil {
-		s.stats.EncryptFailures++
+		s.stats.PassthroughFrames++
 
-		return 0, fmt.Errorf("session: %w", ErrNoActiveEpoch)
+		return copy(encryptedFrame, frameData), nil
 	}
 
 	kind, ok := s.ssrcCodecs[ssrc]
-	if !ok || kind == codecs.CodecUnknown {
+	if !ok {
+		return 0, fmt.Errorf("%w: %d", ErrNoCodecForSSRC, ssrc)
+	}
+	if kind == codecs.CodecUnknown {
 		kind = codecs.CodecOpus
 	}
 
 	fullNonce, truncatedNonce, generation := s.sendCounter.Next()
 	key, err := s.sendRatchet.GetKey(generation)
 	if err != nil {
+		s.stats.EncryptFailures++
+
 		return 0, err
 	}
 
@@ -211,6 +214,8 @@ func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 	if !bytes.Equal(s.sendCipherKey, key) {
 		newCipher, cipherErr := frame.NewGCM8(key)
 		if cipherErr != nil {
+			s.stats.EncryptFailures++
+
 			return 0, fmt.Errorf("cipher creation: %w", cipherErr)
 		}
 		s.sendCipher = newCipher
@@ -226,6 +231,8 @@ func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 		n, err = codecs.EncryptWithCipherInto(kind, encryptedFrame, frameData, s.sendCipher, truncatedNonce)
 	}
 	if err != nil {
+		s.stats.EncryptFailures++
+
 		return 0, err
 	}
 
@@ -356,6 +363,17 @@ func (s *session) OnDavePrepareTransition(transitionID uint16, protocolVersion u
 	defer s.mu.Unlock()
 	s.pendingTransitionID = transitionID
 	s.protocolVersion = protocolVersion
+
+	// transition_id 0 is the DAVE "Sole member reset" / initial transition: it is
+	// executed immediately and is never acknowledged with ready_for_transition.
+	// No commit or welcome arrives in this case, so we must transition to our own
+	// sole-member local group here, deriving our send ratchet so the bot keeps
+	// encrypting while alone (protocol.md "Sole member reset").
+	if transitionID == 0 {
+		s.activeTransitionID = 0
+		s.activateSoleMemberEpochLocked()
+		s.pendingTransitionID = 0
+	}
 }
 
 func (s *session) OnDaveExecuteTransition(transitionID uint16) {
@@ -531,8 +549,10 @@ func (s *session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMe
 		return
 	}
 
-	if s.callbacks != nil {
-		if err := s.callbacks.SendReadyForTransition(transitionID); err != nil {
+	// transition_id 0 is executed immediately and is not acknowledged; only send
+	// ready_for_transition for real (non-initial) transitions (matches golibdave).
+	if transitionID != 0 && s.callbacks != nil {
+		if err := s.retrySend(func() error { return s.callbacks.SendReadyForTransition(transitionID) }); err != nil {
 			s.logger.Error("failed to send ready for transition", "transition_id", transitionID, "error", err)
 		}
 	}
@@ -599,8 +619,10 @@ func (s *session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
 			return 0
 		}())
 
-	if s.callbacks != nil {
-		if err := s.callbacks.SendReadyForTransition(transitionID); err != nil {
+	// transition_id 0 is executed immediately and is not acknowledged; only send
+	// ready_for_transition for real (non-initial) transitions (matches golibdave).
+	if transitionID != 0 && s.callbacks != nil {
+		if err := s.retrySend(func() error { return s.callbacks.SendReadyForTransition(transitionID) }); err != nil {
 			s.logger.Error("failed to send ready for transition", "transition_id", transitionID, "error", err)
 		}
 	}

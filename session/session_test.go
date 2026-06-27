@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/disgoorg/godave"
@@ -147,14 +148,30 @@ func TestOnDavePrepareEpochReset(t *testing.T) {
 	}
 }
 
-func TestEncryptNoActiveEpoch(t *testing.T) {
+// TestEncryptNoActiveEpochPassesThrough verifies that with no active epoch the
+// frame is forwarded unmodified (passthrough) instead of failing, so the audio
+// stream keeps advancing when the bot is alone or mid-transition.
+func TestEncryptNoActiveEpochPassesThrough(t *testing.T) {
 	s := New(nil, "test_user", testCallbacks{})
 	sess := s.(*session)
-	sess.sendCounter.Next()
 
-	_, err := sess.Encrypt(12345, []byte{0x01, 0x02}, make([]byte, 256))
-	if err == nil {
-		t.Fatal("expected error when no active epoch")
+	plaintext := []byte{0x01, 0x02, 0x03, 0x04}
+	out := make([]byte, 256)
+	n, err := sess.Encrypt(12345, plaintext, out)
+	if err != nil {
+		t.Fatalf("expected passthrough, got error: %v", err)
+	}
+	if n != len(plaintext) {
+		t.Fatalf("passthrough wrote %d bytes, want %d", n, len(plaintext))
+	}
+	if !bytes.Equal(out[:n], plaintext) {
+		t.Fatalf("passthrough altered the frame: got %x, want %x", out[:n], plaintext)
+	}
+	if got := sess.Stats().PassthroughFrames; got != 1 {
+		t.Fatalf("PassthroughFrames = %d, want 1", got)
+	}
+	if sess.State().Ready {
+		t.Fatal("State().Ready should be false while in passthrough")
 	}
 }
 
