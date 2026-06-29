@@ -4,7 +4,6 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-
 ## [v0.3.2] - 2026-06-29
 
 [v0.3.2]: https://github.com/thomas-vilte/dave-go/compare/v0.3.1...v0.3.2
