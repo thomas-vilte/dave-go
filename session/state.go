@@ -60,12 +60,15 @@ func (s *session) Stats() Stats {
 	return s.stats
 }
 
-// Ready reports whether the session can accept frames for Encrypt. It always
-// returns true: Encrypt never fails for lack of an epoch, it falls back to
-// passthrough so the audio stream keeps advancing even when the bot is alone or
-// mid-transition (per the DAVE spec, a sole member should still advance its
-// stream). Integrators that want to know whether frames are actually end-to-end
-// encrypted should read State (EpochID/Ready) rather than gate playback here.
+// Ready reports whether the session has an active E2EE epoch and can encrypt
+// frames. Returns false during the MLS handshake window so audio senders can
+// hold frames until encryption is established. Returns true when the bot is
+// alone (sole-member epoch active) or when a multi-member epoch is ready.
+// Encrypt never errors regardless — it falls back to passthrough — so callers
+// that don't gate on Ready still work correctly.
 func (s *session) Ready() bool {
-	return true
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.activeEpoch != nil && s.sendRatchet != nil
 }
