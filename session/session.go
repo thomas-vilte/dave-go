@@ -49,6 +49,33 @@ type session struct {
 	sendCounter *mediakeys.NonceCounter
 	sendRatchet *mediakeys.KeyRatchet
 
+	// retainedSendRatchet holds the previous sendRatchet across an epoch
+	// transition so the sender keeps producing frames the receiver can still
+	// decrypt for up to sendRetentionTTL after the new epoch activates.
+	//
+	// NOTE: this is a deliberate extension beyond the literal protocol text,
+	// not a spec requirement. protocol.md only mandates retention on the
+	// RECEIVE side ("Media receivers temporarily retain the sender key
+	// ratchets for previous epochs... up to ten seconds") and is explicit
+	// that the SEND side switches atomically: "Upon receipt of [execute_
+	// transition], media senders begin using the new... key ratchet" and
+	// "media senders will continue to use key ratchets from the previous
+	// epoch UNTIL the transition is executed" (i.e. not after). By spec
+	// design every member should already have the new receive ratchet
+	// derived (right after processing the commit, before ready_for_
+	// transition is even sent) before any sender could use it, so this
+	// padding exists purely as defense against real-world delivery jitter
+	// on execute_transition across members, not because the protocol asks
+	// for it.
+	//
+	// Cleared lazily by selectSendRatchetLocked when the TTL elapses; that
+	// call also resets sendCounter so the new ratchet starts from nonce 0
+	// per spec ("When a key ratchet is generated for a new epoch, the
+	// sender resets their nonce to 0").
+	retainedSendRatchet   *mediakeys.KeyRatchet
+	retainedSendExpiresAt time.Time
+	sendRetentionTTL      time.Duration
+
 	// sendCipher caches the AES-GCM cipher to avoid recreating it on every frame.
 	// Invalidated when the ratchet key changes (~every 16 frames per DAVE spec).
 	sendCipher    cipher.AEAD
@@ -120,19 +147,20 @@ func newSession(logger *slog.Logger, userID godave.UserID, callbacks godave.Call
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &session{
-		logger:          logger.With("dave_session", id, "user_id", string(userID)),
-		baseLogger:      logger,
-		id:              id,
-		userID:          userID,
-		callbacks:       callbacks,
-		ssrcCodecs:      make(map[uint32]codecs.Kind),
-		users:           make(map[godave.UserID]struct{}),
-		sendCounter:     mediakeys.NewNonceCounter(),
-		epochReady:      make(chan struct{}),
-		recoveryTimeout: epochRecoveryTimeout,
-		shutdownCtx:     ctx,
-		shutdownCancel:  cancel,
-		shutdownDone:    make(chan struct{}),
+		logger:           logger.With("dave_session", id, "user_id", string(userID)),
+		baseLogger:       logger,
+		id:               id,
+		userID:           userID,
+		callbacks:        callbacks,
+		ssrcCodecs:       make(map[uint32]codecs.Kind),
+		users:            make(map[godave.UserID]struct{}),
+		sendCounter:      mediakeys.NewNonceCounter(),
+		sendRetentionTTL: epochRetention,
+		epochReady:       make(chan struct{}),
+		recoveryTimeout:  epochRecoveryTimeout,
+		shutdownCtx:      ctx,
+		shutdownCancel:   cancel,
+		shutdownDone:     make(chan struct{}),
 	}
 }
 
@@ -215,6 +243,28 @@ func (s *session) resetEpochReadyLocked() {
 	s.epochReady = make(chan struct{})
 }
 
+// selectSendRatchetLocked returns the ratchet to use for the next Encrypt
+// frame. During the transition window (between a new epoch activating and
+// sendRetentionTTL elapsing), the previous (retained) ratchet is used so
+// receivers that haven't yet caught up to the new commit can still decrypt
+// frames the sender emits during the gap — see the retainedSendRatchet field
+// doc for why this is a defensive extension beyond the literal protocol text,
+// not a spec requirement. When the retained ratchet expires, this resets
+// sendCounter (so the new ratchet starts from nonce 0 per spec) and returns
+// the new ratchet. Must be called with s.mu held.
+func (s *session) selectSendRatchetLocked() *mediakeys.KeyRatchet {
+	if s.retainedSendRatchet != nil {
+		if time.Now().Before(s.retainedSendExpiresAt) {
+			return s.retainedSendRatchet
+		}
+		s.sendCounter.Reset()
+		s.retainedSendRatchet = nil
+		s.retainedSendExpiresAt = time.Time{}
+	}
+
+	return s.sendRatchet
+}
+
 func (s *session) signalEpochReadyLocked() {
 	select {
 	case <-s.epochReady:
@@ -228,15 +278,26 @@ func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// No active E2EE epoch: forward the frame unmodified (passthrough) instead of
-	// failing, so the audio stream keeps advancing. This covers a sole member
-	// whose epoch has not activated yet and protocol-version-0 (transport-only)
-	// sessions. Receivers see no DAVE marker and pass it through too. Mirrors
-	// libdave's default passthrough mode (protocol.md "Passthrough Mode").
-	if s.activeEpoch == nil || s.sendRatchet == nil {
+	// No E2EE ratchet available: forward the frame unmodified instead of
+	// failing, so the audio stream keeps advancing. This covers a fresh
+	// session (no ratchet yet), a protocol-version-0 (transport-only)
+	// session, and the rare case where both the active and retained
+	// ratchets are gone. Receivers see no DAVE marker and pass it through
+	// too. Mirrors libdave's default passthrough mode (protocol.md
+	// "Passthrough Mode"). Note: a nil activeEpoch is OK as long as the
+	// retained ratchet is set — that's the post-reset transition window
+	// before the new epoch activates.
+	ratchet := s.selectSendRatchetLocked()
+	if ratchet == nil {
 		s.stats.PassthroughFrames++
 
 		return copy(encryptedFrame, frameData), nil
+	}
+
+	// Track frames sent via the retained ratchet during the transition
+	// window (useful for observability — see IMPROVEMENTS #8).
+	if s.retainedSendRatchet != nil {
+		s.stats.TransitionFrames++
 	}
 
 	kind, ok := s.ssrcCodecs[ssrc]
@@ -248,7 +309,7 @@ func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 	}
 
 	fullNonce, truncatedNonce, generation := s.sendCounter.Next()
-	key, err := s.sendRatchet.GetKey(generation)
+	key, err := ratchet.GetKey(generation)
 	if err != nil {
 		s.stats.EncryptFailures++
 
@@ -282,9 +343,16 @@ func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 		return 0, err
 	}
 
+	// activeEpoch may be nil during the post-reset transition window when
+	// we're encrypting with the retained ratchet; log 0 in that case.
+	epochID := uint64(0)
+	if s.activeEpoch != nil {
+		epochID = s.activeEpoch.id
+	}
 	s.logger.Debug("frame encrypted",
 		"ssrc", ssrc,
-		"epoch", s.activeEpoch.id,
+		"epoch", epochID,
+		"retained", s.retainedSendRatchet != nil,
 		"nonce", fullNonce,
 		"generation", generation,
 		"plaintext_size", len(frameData),
@@ -393,7 +461,16 @@ func (s *session) OnSelectProtocolAck(protocolVersion uint16) {
 		s.preCommitGroupState = nil
 		s.proposalQueue = nil
 		s.resetEpochReadyLocked()
-		s.sendCounter.Reset()
+		// Keep the send ratchet (and counter) alive through the transition
+		// window (defensive padding, not spec-mandated — see retainedSendRatchet
+		// field doc): any in-flight frame encrypted with the old key is still
+		// decryptable by receivers in the same group who have it in their
+		// retained list. selectSendRatchetLocked will reset the counter when
+		// sendRetentionTTL elapses.
+		if s.sendRatchet != nil {
+			s.retainedSendRatchet = s.sendRatchet
+			s.retainedSendExpiresAt = time.Now().Add(s.sendRetentionTTL)
+		}
 		s.sendRatchet = nil
 
 		s.pendingKeyPackage = nil
@@ -450,7 +527,14 @@ func (s *session) OnDavePrepareEpoch(epoch int, protocolVersion uint16) {
 	s.preCommitGroupState = nil
 	s.proposalQueue = nil
 	s.resetEpochReadyLocked()
-	s.sendCounter.Reset()
+	// Same as OnSelectProtocolAck: keep the send ratchet alive through
+	// the transition window so receivers with the OLD key can still
+	// decrypt in-flight frames (defensive padding, not spec-mandated —
+	// see retainedSendRatchet field doc).
+	if s.sendRatchet != nil {
+		s.retainedSendRatchet = s.sendRatchet
+		s.retainedSendExpiresAt = time.Now().Add(s.sendRetentionTTL)
+	}
 	s.sendRatchet = nil
 	s.pendingKeyPackage = nil
 	s.mlsClient = nil
