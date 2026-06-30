@@ -30,6 +30,12 @@ type Stats struct {
 	// PassthroughFrames counts frames forwarded unmodified because no E2EE epoch
 	// was active (sole member before activation, or a protocol-version-0 session).
 	PassthroughFrames uint64
+	// TransitionFrames counts frames encrypted with the retained (previous) send
+	// ratchet during the post-activation transition window. Non-zero means the
+	// session activated a new epoch and the receiver might still be on the
+	// previous one. Useful for observability and to confirm the
+	// post-activation bridge is doing its job in production.
+	TransitionFrames uint64
 }
 
 // Reporter is implemented by sessions created with New. Integrators can

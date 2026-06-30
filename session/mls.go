@@ -470,7 +470,22 @@ func (s *session) activatePendingEpochLocked() {
 	s.pendingEpoch = nil
 	s.groupID = append([]byte(nil), s.pendingGroupID...)
 	s.pendingGroupID = nil
-	s.sendCounter.Reset()
+	// activatePendingEpochLocked runs from OnDaveExecuteTransition (opcode 22)
+	// — the exact moment protocol.md says "media senders begin using the
+	// new... key ratchet" immediately, with no grace period on the send side
+	// (retention there is receive-side only, see retainedSendRatchet field
+	// doc in session.go). Retaining the previous send ratchet here is a
+	// deliberate extension beyond that literal text: defensive padding
+	// against execute_transition delivery jitter across members, not a
+	// protocol requirement. The new ratchet only takes over from nonce 0
+	// once selectSendRatchetLocked detects the retained ratchet has expired
+	// (matches spec: "When a key ratchet is generated for a new epoch, the
+	// sender resets their nonce to 0" — that part of the reset IS spec-exact,
+	// just deferred).
+	if s.sendRatchet != nil {
+		s.retainedSendRatchet = s.sendRatchet
+		s.retainedSendExpiresAt = time.Now().Add(s.sendRetentionTTL)
+	}
 
 	if sender := s.activeEpoch.senders[s.userID]; sender != nil {
 		s.sendRatchet = sender.ratchet
