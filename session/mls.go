@@ -578,7 +578,13 @@ func (s *session) restorePreCommitStateLocked() error {
 // per the DAVE protocol spec §"Recovery from Invalid Commit or Welcome":
 // the client must locally reset MLS state and generate a new key package so
 // the voice gateway can re-add the member via a fresh add proposal.
-// Must be called with s.mu held.
+//
+// If the re-send of the key package fails because the voice gateway is
+// transiently down ("shard is not ready"), the recovery watchdog is NOT
+// armed — re-arming it would just loop on a transport problem, and the new
+// key package cannot leave either. The cleanest path is to wait for the
+// gateway to reconnect, which triggers a fresh OnSelectProtocolAck that
+// resets the session from scratch. Must be called with s.mu held.
 func (s *session) invalidateAndResendKeyPackageLocked() {
 	s.mlsClient = nil
 	s.groupID = nil
@@ -593,6 +599,16 @@ func (s *session) invalidateAndResendKeyPackageLocked() {
 	// AFTER this invalidation, not one that was already active before.
 	s.resetEpochReadyLocked()
 	if err := s.ensurePendingKeyPackageLocked(); err != nil {
+		if isShardNotReady(err) {
+			s.logger.Warn(
+				"key package re-send skipped: shard not ready (transport down). "+
+					"Waiting for OnSelectProtocolAck to reset the session on reconnect.",
+				"error", err,
+			)
+			// No recovery watchdog: the gateway reconnect will deliver
+			// OnSelectProtocolAck, which clears all MLS state.
+			return
+		}
 		s.logger.Error("failed to send new key package after invalid commit/welcome", "error", err)
 	}
 	s.watchRecoveryLocked()
@@ -726,6 +742,22 @@ func (s *session) commitProposalsLocked() error {
 	}
 	s.logger.Debug("commitProposalsLocked: sending commit/welcome to gateway", "payload_size", len(payload))
 	if err := s.retrySend(func() error { return s.callbacks.SendMLSCommitWelcome(payload) }); err != nil {
+		if isShardNotReady(err) {
+			// Transport down: roll back the local commit so the in-memory MLS
+			// state stays consistent with the gateway (which never got our commit).
+			// OnSelectProtocolAck on reconnect will reset everything cleanly.
+			if rbErr := s.restorePreCommitStateLocked(); rbErr != nil {
+				s.logger.Error("commitProposalsLocked: rollback after transport failure failed", "error", rbErr)
+			}
+			s.logger.Warn(
+				"commit send skipped: shard not ready (transport down). "+
+					"Rolled back local MLS state; waiting for OnSelectProtocolAck on reconnect.",
+				"error", err,
+			)
+
+			return nil
+		}
+
 		return err
 	}
 

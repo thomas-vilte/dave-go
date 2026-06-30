@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -102,5 +103,73 @@ func TestRecoveryWatchdogStopsWhenEpochActivates(t *testing.T) {
 	invalid, _ := cb.counts()
 	if invalid != 0 {
 		t.Fatalf("watchdog fired despite epoch activation: %d invalid commits", invalid)
+	}
+}
+
+// shardNotReadyCallbacks simulates a voice gateway that is transiently
+// down: every SendMLSKeyPackage returns "shard is not ready" so retrySend
+// exhausts its attempts. Used to verify that invalidateAndResendKeyPackageLocked
+// does NOT arm the recovery watchdog in that case (the gateway reconnect
+// will deliver OnSelectProtocolAck to reset the session cleanly).
+type shardNotReadyCallbacks struct {
+	mu             sync.Mutex
+	invalidCommits int
+	keyPackages    int
+}
+
+func (c *shardNotReadyCallbacks) SendMLSKeyPackage(_ []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.keyPackages++
+
+	return errors.New("shard is not ready")
+}
+
+func (c *shardNotReadyCallbacks) SendMLSCommitWelcome(_ []byte) error   { return nil }
+func (c *shardNotReadyCallbacks) SendReadyForTransition(_ uint16) error { return nil }
+func (c *shardNotReadyCallbacks) SendInvalidCommitWelcome(_ uint16) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.invalidCommits++
+
+	return nil
+}
+
+func (c *shardNotReadyCallbacks) counts() (invalidCommits, keyPackages int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.invalidCommits, c.keyPackages
+}
+
+// TestInvalidation_NoWatchdogOnShardNotReady
+// when the re-send of the key package after an invalidation fails because
+// the gateway is down, the recovery watchdog must NOT be armed. Re-arming
+// it would just loop on a transport problem (and the new key package cannot
+// leave either). The natural OnSelectProtocolAck on gateway reconnect resets
+// the session.
+func TestInvalidation_NoWatchdogOnShardNotReady(t *testing.T) {
+	cb := &shardNotReadyCallbacks{}
+	s := newRecoveryTestSession(t, cb)
+
+	s.mu.Lock()
+	s.invalidateAndResendKeyPackageLocked()
+	s.mu.Unlock()
+
+	// Sleep well past the recovery timeout. With the fix the watchdog is
+	// never armed, so invalidCommits stays 0. Without the fix, the watchdog
+	// would re-fire maxRecoveryAttempts times.
+	time.Sleep(5 * s.recoveryTimeout)
+
+	invalid, _ := cb.counts()
+	if invalid != 0 {
+		t.Fatalf("recovery watchdog fired despite transport failure: %d invalid commits", invalid)
+	}
+
+	// Sanity check: at least one SendMLSKeyPackage was attempted (and failed).
+	// The gateway would have received it in the working case.
+	_, kp := cb.counts()
+	if kp == 0 {
+		t.Fatal("expected ensurePendingKeyPackageLocked to attempt at least one SendMLSKeyPackage")
 	}
 }
