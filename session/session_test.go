@@ -2,9 +2,13 @@ package session
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/disgoorg/godave"
+	"github.com/thomas-vilte/dave-go/mediakeys"
 )
 
 type testCallbacks struct{}
@@ -199,6 +203,112 @@ func TestEncryptNoActiveEpochPassesThrough(t *testing.T) {
 	}
 	if sess.State().Ready {
 		t.Fatal("State().Ready should be false while in passthrough")
+	}
+}
+
+func TestWaitReadyContextCanceled(t *testing.T) {
+	s := New(nil, "test_user", testCallbacks{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := s.(Reporter).WaitReady(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestWaitReadyAlreadyReady(t *testing.T) {
+	sess := New(nil, "test_user", testCallbacks{}).(*session)
+
+	sess.mu.Lock()
+	sess.activeEpoch = &epochState{id: 1, senders: make(map[godave.UserID]*senderState)}
+	var ratchet mediakeys.KeyRatchet
+	sess.sendRatchet = &ratchet
+	sess.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	d, err := sess.WaitReady(ctx)
+	if err != nil {
+		t.Fatalf("WaitReady returned unexpected error: %v", err)
+	}
+	if d > time.Millisecond {
+		t.Fatalf("expected near-zero duration when already ready, got %v", d)
+	}
+}
+
+func TestWaitReadySignaled(t *testing.T) {
+	sess := New(nil, "test_user", testCallbacks{}).(*session)
+
+	ready := make(chan time.Duration, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		d, _ := sess.WaitReady(ctx)
+		ready <- d
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+
+	sess.mu.Lock()
+	sess.activeEpoch = &epochState{id: 1, senders: make(map[godave.UserID]*senderState)}
+	var ratchet mediakeys.KeyRatchet
+	sess.sendRatchet = &ratchet
+	sess.signalEpochReadyLocked()
+	sess.mu.Unlock()
+
+	select {
+	case d := <-ready:
+		if d <= 0 {
+			t.Fatalf("expected positive duration, got %v", d)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitReady did not return after epoch was signaled")
+	}
+}
+
+func TestWaitReadyEpochReset(t *testing.T) {
+	sess := New(nil, "test_user", testCallbacks{}).(*session)
+
+	ready := make(chan time.Duration, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		d, _ := sess.WaitReady(ctx)
+		ready <- d
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+
+	// First: simulate a reset (PrepareEpoch for a new epoch) — goroutine must re-wait.
+	sess.mu.Lock()
+	sess.resetEpochReadyLocked()
+	sess.mu.Unlock()
+
+	select {
+	case <-ready:
+		t.Fatal("WaitReady returned after reset but before ready")
+	case <-time.After(20 * time.Millisecond):
+		// good: still waiting
+	}
+
+	// Now signal ready.
+	sess.mu.Lock()
+	sess.activeEpoch = &epochState{id: 2, senders: make(map[godave.UserID]*senderState)}
+	var ratchet mediakeys.KeyRatchet
+	sess.sendRatchet = &ratchet
+	sess.signalEpochReadyLocked()
+	sess.mu.Unlock()
+
+	select {
+	case d := <-ready:
+		if d <= 0 {
+			t.Fatalf("expected positive duration after reset+signal, got %v", d)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitReady did not return after reset then signal")
 	}
 }
 
