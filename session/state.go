@@ -1,6 +1,9 @@
 package session
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // State is a snapshot of the session's ability to encrypt media.
 type State struct {
@@ -35,6 +38,7 @@ type Stats struct {
 type Reporter interface {
 	State() State
 	Stats() Stats
+	WaitReady(ctx context.Context) (time.Duration, error)
 }
 
 var _ Reporter = (*session)(nil)
@@ -71,4 +75,42 @@ func (s *session) Ready() bool {
 	defer s.mu.RUnlock()
 
 	return s.activeEpoch != nil && s.sendRatchet != nil
+}
+
+// WaitReady implements Reporter. It blocks without polling until the first
+// E2EE epoch activates or ctx is done. The start reference is degradedSince
+// if already set (i.e. PrepareEpoch was received before the call), otherwise
+// the moment WaitReady is called — so calling it right after NewWithReporter
+// gives an accurate first-handshake latency.
+//
+// The loop is safe against epoch resets: resetEpochReadyLocked closes the old
+// channel and replaces it atomically under the write lock, so a spurious wake
+// always re-reads a fresh channel on the next iteration rather than spinning.
+func (s *session) WaitReady(ctx context.Context) (time.Duration, error) {
+	start := time.Now()
+
+	s.mu.RLock()
+	if !s.degradedSince.IsZero() {
+		start = s.degradedSince
+	}
+	s.mu.RUnlock()
+
+	for {
+		s.mu.RLock()
+		ready := s.activeEpoch != nil && s.sendRatchet != nil
+		ch := s.epochReady
+		s.mu.RUnlock()
+
+		if ready {
+			return time.Since(start), nil
+		}
+
+		select {
+		case <-ch:
+			// Either signalEpochReadyLocked (session ready) or
+			// resetEpochReadyLocked (new epoch starting) — re-check under lock.
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
 }
