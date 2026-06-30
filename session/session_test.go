@@ -19,12 +19,13 @@ func (testCallbacks) SendReadyForTransition(uint16) error   { return nil }
 func (testCallbacks) SendInvalidCommitWelcome(uint16) error { return nil }
 
 // TestNewWithReporter verifies the create func hands the integrator a working
-// Reporter via the closure, so they don't have to type-assert the godave.Session.
+// Reporter AND a Closer via the closure, so they don't have to type-assert
+// the godave.Session to grab either.
 func TestNewWithReporter(t *testing.T) {
 	cb := testCallbacks{}
 	var gotReporter Reporter
 
-	createFunc := NewWithReporter(func(r Reporter, _ godave.Callbacks) {
+	createFunc := NewWithReporter(func(r Reporter, _ Closer, _ godave.Callbacks) {
 		gotReporter = r
 	})
 

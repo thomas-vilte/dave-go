@@ -623,10 +623,16 @@ func (s *session) watchRecoveryLocked() {
 		case <-ready:
 			// Epoch activated (or a newer invalidation took over supervision).
 			return
+		case <-s.shutdownCtx.Done():
+			// Session was discarded by the integrator (move/disconnect).
+			return
 		case <-time.After(timeout):
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.shutdownCtx.Err() != nil {
+			return
+		}
 		select {
 		case <-ready:
 			// Activated while we were acquiring the lock.
@@ -734,10 +740,16 @@ func (s *session) commitProposalsLocked() error {
 		case <-ready:
 			// Epoch activated normally — nothing to do.
 			return
+		case <-s.shutdownCtx.Done():
+			// Session was discarded by the integrator.
+			return
 		case <-time.After(epochRecoveryTimeout):
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.shutdownCtx.Err() != nil {
+			return
+		}
 		if s.pendingEpoch == nil {
 			return
 		}

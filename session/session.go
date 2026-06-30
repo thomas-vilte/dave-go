@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/hex"
@@ -84,6 +85,13 @@ type session struct {
 
 	stats         Stats
 	degradedSince time.Time
+
+	// shutdown lifecycle
+	//nolint:containedctx // intentional: the session owns its shutdown so Close can cancel the watchdogs; not a request-scoped ctx.
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
+	shutdownOnce   sync.Once
+	shutdownDone   chan struct{}
 }
 
 type epochState struct {
@@ -99,11 +107,17 @@ type senderState struct {
 }
 
 func New(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) godave.Session {
+	return newSession(logger, userID, callbacks)
+}
+
+func newSession(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) *session {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	id := newSessionID()
+
+	ctx, cancel := context.WithCancel(context.Background())
 
 	return &session{
 		logger:          logger.With("dave_session", id, "user_id", string(userID)),
@@ -116,34 +130,35 @@ func New(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) 
 		sendCounter:     mediakeys.NewNonceCounter(),
 		epochReady:      make(chan struct{}),
 		recoveryTimeout: epochRecoveryTimeout,
+		shutdownCtx:     ctx,
+		shutdownCancel:  cancel,
+		shutdownDone:    make(chan struct{}),
 	}
 }
 
-// ReporterFunc receives a session's Reporter and the godave.Callbacks it was
-// created with, right after the session is created. It lets integrators observe
-// E2EE readiness/health (State/Stats) without type-asserting the godave.Session
-// later — e.g. to gate or pause playback. The callbacks is the voice connection,
-// so you can key the Reporter by guild/conn from it.
-type ReporterFunc func(Reporter, godave.Callbacks)
-
-// NewWithReporter returns a godave.SessionCreateFunc that creates a session and
-// hands its Reporter to report. Pass it straight to voice.WithDaveSessionCreateFunc
-// so the integrator gets the Reporter via a closure instead of capturing and
-// type-asserting the godave.Session by hand:
+// ReporterFunc receives a session's Reporter, Closer, and the godave.Callbacks
+// it was created with, right after the session is created. It lets integrators
+// observe E2EE readiness/health (State/Stats) and capture the Closer for
+// lifecycle teardown without type-asserting the godave.Session later.
+//
+// Example:
 //
 //	voice.WithDaveSessionCreateFunc(session.NewWithReporter(
-//		func(r session.Reporter, cb godave.Callbacks) {
-//			// stash r keyed by guild/conn so your OpusFrameProvider
-//			// can read r.State().Ready before feeding frames
-//		},
+//	    func(r session.Reporter, c session.Closer, cb godave.Callbacks) {
+//	        // stash r + c keyed by guild/conn so your OpusFrameProvider
+//	        // can read r.State().Ready before feeding frames, and the
+//	        // disconnect handler can call c.Close() on discard.
+//	    },
 //	))
+type ReporterFunc func(Reporter, Closer, godave.Callbacks)
+
+// NewWithReporter returns a godave.SessionCreateFunc that creates a session
+// and hands its Reporter and Closer to report. See ReporterFunc for usage.
 func NewWithReporter(report ReporterFunc) godave.SessionCreateFunc {
 	return func(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) godave.Session {
-		s := New(logger, userID, callbacks)
+		s := newSession(logger, userID, callbacks)
 		if report != nil {
-			if r, ok := s.(Reporter); ok {
-				report(r, callbacks)
-			}
+			report(s, s, callbacks)
 		}
 
 		return s
