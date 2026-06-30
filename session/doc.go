@@ -21,8 +21,18 @@
 //	  ├──[OnDavePrepareTransition]──► prepare_transition
 //	  │       └── process commit/welcome -> pendingEpoch
 //	  │
-//	  └──[OnDaveExecuteTransition]──► active
-//	          └── swap pendingEpoch -> activeEpoch
+//	  ├──[OnDaveExecuteTransition]──► active
+//	  │       └── swap pendingEpoch -> activeEpoch
+//	  │
+//	  └──[Close]──► closed (integrator-initiated; cancels watchdog goroutines)
+//
+// Lifecycle:
+//
+//	The session is single-use per voice connection. The integrator MUST
+//	call Closer.Close() when the session is discarded (channel move, voice
+//	disconnect) so the internal recovery/commit watchdogs exit promptly.
+//	Without it, an old session can keep re-arming invalidations on a
+//	channel the bot no longer occupies.
 //
 // Send path:
 //
