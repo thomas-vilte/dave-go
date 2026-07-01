@@ -86,6 +86,17 @@ func TestRecoveryWatchdogRetriesThenGivesUp(t *testing.T) {
 	if invalid != maxRecoveryAttempts {
 		t.Fatalf("watchdog kept retrying after giving up: %d invalid commits, want %d", invalid, maxRecoveryAttempts)
 	}
+
+	s.mu.RLock()
+	gotStats := s.stats.RecoveryAttempts
+	gotTransport := s.stats.RecoveryAttemptsTransport
+	s.mu.RUnlock()
+	if gotStats != maxRecoveryAttempts {
+		t.Fatalf("Stats.RecoveryAttempts = %d, want %d", gotStats, maxRecoveryAttempts)
+	}
+	if gotTransport != 0 {
+		t.Fatalf("Stats.RecoveryAttemptsTransport = %d, want 0 (this is an MLS fault, not a transport skip)", gotTransport)
+	}
 }
 
 func TestRecoveryWatchdogStopsWhenEpochActivates(t *testing.T) {

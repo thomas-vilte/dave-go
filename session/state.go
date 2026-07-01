@@ -25,8 +25,17 @@ type Stats struct {
 	CommitsFailed    uint64
 	WelcomesJoined   uint64
 	WelcomesFailed   uint64
+	// RecoveryAttempts counts recoveries armed by a real MLS fault (invalid
+	// commit/welcome) — see watchRecoveryLocked. Transport-induced skips
+	// (voice gateway down, "shard is not ready") increment
+	// RecoveryAttemptsTransport instead, so an integrator can separate
+	// Discord-side MLS faults from network blips without parsing logs.
 	RecoveryAttempts uint64
-	EncryptFailures  uint64
+	// RecoveryAttemptsTransport counts the number of times a recovery was
+	// skipped because the voice gateway was transiently down ("shard is not
+	// ready"). Distinct from RecoveryAttempts, which only counts MLS faults.
+	RecoveryAttemptsTransport uint64
+	EncryptFailures           uint64
 	// PassthroughFrames counts frames forwarded unmodified because no E2EE epoch
 	// was active (sole member before activation, or a protocol-version-0 session).
 	PassthroughFrames uint64
@@ -36,6 +45,31 @@ type Stats struct {
 	// previous one. Useful for observability and to confirm the
 	// post-activation bridge is doing its job in production.
 	TransitionFrames uint64
+	// TransitionWindows counts distinct post-activation retention windows
+	// entered by this session (one per epoch activation that had a previous send
+	// ratchet to retain). Complements TransitionFrames: the retention TTL is a
+	// fixed constant (sendRetentionTTL), so "total time in transition" would be
+	// TransitionWindows * sendRetentionTTL — redundant. A window with zero
+	// TransitionFrames is still informative (epoch activated without any frame
+	// emitted in the gap); a window with many TransitionFrames confirms jitter
+	// on execute_transition delivery.
+	TransitionWindows uint64
+	// DegradedDuration accumulates time spent in degraded state (no active
+	// E2EE epoch) across all recovery cycles that ended in
+	// markRecoveredLocked. Gaps that end when the session is closed without
+	// recovery are NOT counted — only recoveries that succeeded. Reflects the
+	// duration of MLS-induced outages the session actually fixed on its own.
+	DegradedDuration time.Duration
+	// TransportRetryDuration accumulates the wall-clock time this session
+	// spent inside retrySend backoff loops caused by "shard is not ready"
+	// (voice gateway transiently down), across every call site that uses
+	// retrySend (key package, commit/welcome, ready-for-transition sends).
+	// Counted whether the retry eventually succeeded, exhausted its attempts,
+	// or was cut short by Close(). Unlike RecoveryAttemptsTransport (a count
+	// of skipped recoveries), this answers "how long was the gateway down,
+	// from this session's point of view" — useful to distinguish a brief
+	// blip from a prolonged outage without grepping DEBUG logs.
+	TransportRetryDuration time.Duration
 }
 
 // Reporter is implemented by sessions created with New. Integrators can

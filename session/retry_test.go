@@ -35,6 +35,9 @@ func TestRetrySend_SucceedsOnFirstAttempt(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("expected 1 call, got %d", calls)
 	}
+	if got := s.stats.TransportRetryDuration; got != 0 {
+		t.Fatalf("TransportRetryDuration = %v, want 0 (no retry happened)", got)
+	}
 }
 
 func TestRetrySend_RetriesOnShardNotReady(t *testing.T) {
@@ -100,6 +103,9 @@ func TestRetrySend_DoesNotRetryOnOtherErrors(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("expected 1 call (no retry), got %d", calls)
+	}
+	if got := s.stats.TransportRetryDuration; got != 0 {
+		t.Fatalf("TransportRetryDuration = %v, want 0 (failure wasn't shard-not-ready, no retry loop entered)", got)
 	}
 }
 
@@ -200,5 +206,94 @@ func TestRetrySend_ExponentialBackoff(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("backoff too slow: %v (expected < 2s)", elapsed)
+	}
+}
+
+// TestRetrySend_TransportRetryDurationAccumulates verifies that
+// Stats.TransportRetryDuration tracks the real wall-clock time spent in the
+// backoff loop — both when the retry eventually succeeds and when it
+// exhausts all attempts — and that it keeps accumulating across multiple
+// retrySend calls on the same session instead of being reset each time.
+func TestRetrySend_TransportRetryDurationAccumulates(t *testing.T) {
+	origDelay, origMax := retryDelay, retryMaxDelay
+	retryDelay = 20 * time.Millisecond
+	retryMaxDelay = 50 * time.Millisecond
+	defer func() {
+		retryDelay = origDelay
+		retryMaxDelay = origMax
+	}()
+
+	s := newTestSession()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// First call: fails twice with "shard is not ready", then succeeds.
+	// Schedule: sleep(20ms) then sleep(40ms) = 60ms minimum before success.
+	calls := 0
+	err := s.retrySend(func() error {
+		calls++
+		if calls < 3 {
+			return errors.New("shard is not ready")
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("expected nil after retries, got %v", err)
+	}
+
+	firstDuration := s.stats.TransportRetryDuration
+	if firstDuration < 60*time.Millisecond {
+		t.Fatalf("TransportRetryDuration = %v after successful retry, want >= 60ms", firstDuration)
+	}
+
+	// Second call: exhausts all attempts. Must ADD to the counter, not reset it.
+	err = s.retrySend(func() error {
+		return errors.New("shard is not ready")
+	})
+	if err == nil {
+		t.Fatal("expected error from exhausted retries")
+	}
+
+	secondTotal := s.stats.TransportRetryDuration
+	if secondTotal <= firstDuration {
+		t.Fatalf("TransportRetryDuration = %v after second call, want > %v (must accumulate)", secondTotal, firstDuration)
+	}
+}
+
+// TestRetrySend_TransportRetryDurationCountsPartialWaitOnClose verifies that
+// Close()-interrupted retries still count the time actually spent waiting,
+// even though the loop exits early via context cancellation instead of
+// completing the backoff schedule.
+func TestRetrySend_TransportRetryDurationCountsPartialWaitOnClose(t *testing.T) {
+	origDelay := retryDelay
+	retryDelay = 200 * time.Millisecond
+	defer func() { retryDelay = origDelay }()
+
+	s := newTestSession()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.retrySend(func() error {
+			return errors.New("shard is not ready")
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	s.Close()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retrySend did not exit within 1s after Close")
+	}
+
+	if got := s.stats.TransportRetryDuration; got == 0 {
+		t.Fatal("TransportRetryDuration = 0, want > 0 (retry was in progress when Close interrupted it)")
 	}
 }
