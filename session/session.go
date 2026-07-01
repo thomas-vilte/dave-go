@@ -586,7 +586,8 @@ func (s *session) processAndCommitProposalBatchLocked(proposals []byte) {
 
 		return
 	}
-	if err := s.processProposalBatchLocked(proposals); err != nil {
+	acceptedAny, err := s.processProposalBatchLocked(proposals)
+	if err != nil {
 		s.logger.Error("failed to process proposals", "error", err, "size", len(proposals))
 
 		return
@@ -601,6 +602,12 @@ func (s *session) processAndCommitProposalBatchLocked(proposals []byte) {
 	// processing" (protocol.md:176) — un revoke puro no deja proposals nuevos.
 	if len(proposals) > 0 && proposals[0] == 1 {
 		s.logger.Info("mls revoke processed, no commit needed",
+			"size", len(proposals))
+
+		return
+	}
+	if !acceptedAny {
+		s.logger.Info("mls proposals processed without accepted append proposals, skipping commit",
 			"size", len(proposals))
 
 		return
