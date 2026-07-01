@@ -38,6 +38,21 @@ func isShardNotReady(err error) bool {
 // during sleeps) so callers don't need to re-validate state after each attempt.
 func (s *session) retrySend(fn func() error) error {
 	delay := retryDelay
+
+	// retryStart is set the first time we decide to retry (i.e. the first
+	// "shard is not ready" failure), not at function entry — a single fn()
+	// call's own latency isn't gateway downtime. Accumulated into
+	// Stats.TransportRetryDuration on every exit path (success, exhausted
+	// attempts, or Close() interruption) via defer so there's one place
+	// that does the bookkeeping regardless of how the loop ends.
+	var retryStart time.Time
+
+	defer func() {
+		if !retryStart.IsZero() {
+			s.stats.TransportRetryDuration += time.Since(retryStart)
+		}
+	}()
+
 	for i := range retryMaxAttempts {
 		err := fn()
 		if err == nil {
@@ -46,6 +61,10 @@ func (s *session) retrySend(fn func() error) error {
 
 		if !isShardNotReady(err) || i == retryMaxAttempts-1 {
 			return err
+		}
+
+		if retryStart.IsZero() {
+			retryStart = time.Now()
 		}
 
 		s.logger.Debug("shard not ready, retrying send",

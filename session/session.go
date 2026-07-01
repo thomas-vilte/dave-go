@@ -470,6 +470,7 @@ func (s *session) OnSelectProtocolAck(protocolVersion uint16) {
 		if s.sendRatchet != nil {
 			s.retainedSendRatchet = s.sendRatchet
 			s.retainedSendExpiresAt = time.Now().Add(s.sendRetentionTTL)
+			s.stats.TransitionWindows++
 		}
 		s.sendRatchet = nil
 
@@ -534,6 +535,7 @@ func (s *session) OnDavePrepareEpoch(epoch int, protocolVersion uint16) {
 	if s.sendRatchet != nil {
 		s.retainedSendRatchet = s.sendRatchet
 		s.retainedSendExpiresAt = time.Now().Add(s.sendRetentionTTL)
+		s.stats.TransitionWindows++
 	}
 	s.sendRatchet = nil
 	s.pendingKeyPackage = nil

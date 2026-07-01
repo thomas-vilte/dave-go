@@ -412,6 +412,7 @@ func (s *session) markRecoveredLocked(epochID uint64) {
 	if s.degradedSince.IsZero() {
 		return
 	}
+	s.stats.DegradedDuration += time.Since(s.degradedSince)
 	s.logger.Info("session recovered", "degraded_for", time.Since(s.degradedSince).String(), "epoch_id", epochID)
 	s.degradedSince = time.Time{}
 }
@@ -489,6 +490,7 @@ func (s *session) activatePendingEpochLocked() {
 	if s.sendRatchet != nil {
 		s.retainedSendRatchet = s.sendRatchet
 		s.retainedSendExpiresAt = time.Now().Add(s.sendRetentionTTL)
+		s.stats.TransitionWindows++
 	}
 
 	if sender := s.activeEpoch.senders[s.userID]; sender != nil {
@@ -619,6 +621,7 @@ func (s *session) invalidateAndResendKeyPackageLocked() {
 	s.resetEpochReadyLocked()
 	if err := s.ensurePendingKeyPackageLocked(); err != nil {
 		if isShardNotReady(err) {
+			s.stats.RecoveryAttemptsTransport++
 			s.logger.Warn(
 				"key package re-send skipped: shard not ready (transport down). "+
 					"Waiting for OnSelectProtocolAck to reset the session on reconnect.",
