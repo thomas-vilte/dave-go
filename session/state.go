@@ -17,6 +17,14 @@ type State struct {
 	// or if the session never degraded). Integrators can use it to stop
 	// sending frames or force a full voice reconnect after a threshold.
 	DegradedSince time.Time
+	// ProtocolVersion is the DAVE protocol version reported by the voice
+	// gateway via SELECT_PROTOCOL_ACK, PREPARE_EPOCH or PREPARE_TRANSITION.
+	// 0 means transport-only: this channel will never have E2EE and Ready
+	// will stay false. >0 plus !Ready means a transient MLS handshake
+	// window. Use it to tell "hold frames while handshake completes" apart
+	// from "no E2EE; passthrough forever" without blocking the audio
+	// sender indefinitely.
+	ProtocolVersion uint16
 }
 
 // Stats are cumulative counters since the session was created.
@@ -87,8 +95,9 @@ func (s *session) State() State {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	st := State{
-		Ready:         s.activeEpoch != nil && s.sendRatchet != nil,
-		DegradedSince: s.degradedSince,
+		Ready:           s.activeEpoch != nil && s.sendRatchet != nil,
+		DegradedSince:   s.degradedSince,
+		ProtocolVersion: s.protocolVersion,
 	}
 	if s.activeEpoch != nil {
 		st.EpochID = s.activeEpoch.id
@@ -110,6 +119,19 @@ func (s *session) Stats() Stats {
 // alone (sole-member epoch active) or when a multi-member epoch is ready.
 // Encrypt never errors regardless — it falls back to passthrough — so callers
 // that don't gate on Ready still work correctly.
+//
+// Equivalent signals: Reporter.State().Ready is the same boolean as a
+// point-in-time snapshot, and Reporter.WaitReady(ctx) blocks until the first
+// time it becomes true. The Reporter is reachable by type-asserting the
+// godave.Session returned by NewWithReporter's SessionCreateFunc; the noop
+// session returned by godave.NewNoopSession makes Ready always return true.
+//
+// To tell "handshake in progress, expect E2EE soon" apart from "this channel
+// will never have E2EE", check State().ProtocolVersion. 0 means no E2EE will
+// be established on this channel (Ready stays false forever); >0 with !Ready
+// means a transient handshake window. Audio senders that don't want to hold
+// frames forever should gate on (State().Ready || State().ProtocolVersion == 0),
+// not just Ready().
 func (s *session) Ready() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
