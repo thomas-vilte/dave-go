@@ -87,6 +87,20 @@ type Reporter interface {
 	State() State
 	Stats() Stats
 	WaitReady(ctx context.Context) (time.Duration, error)
+	// EpochAuthenticator returns the raw epoch authenticator secret (32
+	// bytes for MLS ciphersuite 2 / DHKEMP256, the DAVE-mandated one) for
+	// the active MLS epoch, per RFC 9420 §8.2. All members of the same
+	// group in the same epoch get the same value; it changes whenever a
+	// commit advances the epoch. Returns ErrNoActiveEpoch if no E2EE
+	// epoch is active.
+	EpochAuthenticator(ctx context.Context) ([]byte, error)
+	// EpochAuthenticatorCode returns the epoch authenticator rendered as
+	// a 30-digit displayable code (6 groups of 5 digits, no separators)
+	// per protocol.md "Displayable Codes". This is the same string Discord
+	// first-party clients show for out-of-band verification — members
+	// compare it to confirm their view of the group matches. Returns
+	// ErrNoActiveEpoch if no E2EE epoch is active.
+	EpochAuthenticatorCode(ctx context.Context) (string, error)
 }
 
 var _ Reporter = (*session)(nil)

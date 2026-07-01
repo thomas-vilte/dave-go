@@ -406,6 +406,40 @@ func (s *session) markDegradedLocked(reason string, args ...any) {
 	s.logger.Warn("session entering degraded state", append([]any{"reason", reason}, args...)...)
 }
 
+// EpochAuthenticator returns the raw epoch authenticator for the active MLS
+// epoch (RFC 9420 §8.2, via mls-go). Returns ErrNoActiveEpoch if no epoch
+// is active or no MLS group has been established.
+func (s *session) EpochAuthenticator(ctx context.Context) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mlsClient == nil || len(s.groupID) == 0 {
+		return nil, ErrNoActiveEpoch
+	}
+
+	secret, err := s.mlsClient.client.EpochAuthenticator(ctx, s.groupID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(secret) == 0 {
+		return nil, ErrNoActiveEpoch
+	}
+
+	return secret, nil
+}
+
+// EpochAuthenticatorCode returns the epoch authenticator as a 30-digit
+// displayable code per protocol.md "Displayable Codes". Same string Discord
+// first-party clients show for out-of-band verification.
+func (s *session) EpochAuthenticatorCode(ctx context.Context) (string, error) {
+	secret, err := s.EpochAuthenticator(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return mediakeys.DisplayableCode(secret, 30, 5)
+}
+
 // markRecoveredLocked logs the recovery and clears the degraded clock if the
 // session had been degraded; no-op otherwise.
 func (s *session) markRecoveredLocked(epochID uint64) {
