@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/disgoorg/godave v0.2.0
-	github.com/thomas-vilte/mls-go v1.3.1
+	github.com/thomas-vilte/mls-go v1.4.0
 )
 
 require (
