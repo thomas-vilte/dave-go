@@ -18,4 +18,5 @@ var (
 	ErrNoPreCommitState          = errors.New("session: no pre-commit state to restore")
 	ErrExpectedWelcome           = errors.New("session: expected Welcome in MLSMessage")
 	ErrNoCodecForSSRC            = errors.New("session: no codec assigned for ssrc")
+	ErrProposalsTooMany          = errors.New("session: too many proposal refs in revoke batch")
 )

@@ -266,9 +266,13 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 
 	operationType := proposals[0]
 	s.logger.Debug("processProposalBatchLocked", "operation_type", operationType, "total_size", len(proposals))
-	if operationType != 0 {
-		// revoke: not yet handled — ignore safely
-		s.logger.Debug("processProposalBatchLocked: revoke operation, ignoring")
+	switch operationType {
+	case 0: // append: TLSVector<MLSMessage> — existing flow below.
+	case 1: // revoke: TLSVector<ProposalRef>
+		return s.processRevokeProposalsLocked(proposals[1:])
+	default:
+		s.logger.Debug("processProposalBatchLocked: unknown operation_type, ignoring",
+			"operation_type", operationType)
 
 		return nil
 	}
@@ -806,6 +810,62 @@ func (s *session) commitProposalsLocked() error {
 		}
 		s.invalidateAndResendKeyPackageLocked()
 	}()
+
+	return nil
+}
+
+// proposalRefSize is the length of an MLS ProposalRef (HashReference<V>) for
+// the ciphersuite DAVE requires: MLS128DHKEMP256 -> SHA-256 -> 32 bytes.
+// Confirmed against mls-go/ciphersuite/hash_ref.go + coverage_test.go:59.
+const proposalRefSize = 32
+
+// maxRevokeRefs is a defensive ceiling against corrupted gateway payloads
+// (a real revoke never carries hundreds of refs at once).
+const maxRevokeRefs = 256
+
+// processRevokeProposalsLocked handles DAVE opcode 27 with operation_type=1
+// (protocol.md:1020-1048): payload = TLSVector<ProposalRef>, each ref 32 bytes.
+// Delegates to mls.Client.RevokeProposals, which removes the proposals from
+// the local pending store and proposalByRef lookup; idempotent.
+func (s *session) processRevokeProposalsLocked(payload []byte) error {
+	vecLen, headerSize, err := readTLSVectorLength(payload)
+	if err != nil {
+		return fmt.Errorf("reading revoke vector length: %w", err)
+	}
+	end := headerSize + int(vecLen)
+	if end > len(payload) {
+		return fmt.Errorf("%w: need %d bytes, have %d", ErrProposalsTruncated, end, len(payload))
+	}
+
+	body := payload[headerSize:end]
+	if len(body) == 0 {
+		s.logger.Debug("processRevokeProposalsLocked: revoke batch empty")
+
+		return nil
+	}
+	if len(body)%proposalRefSize != 0 {
+		return fmt.Errorf("%w: revoke body %d bytes not multiple of %d",
+			ErrProposalsTruncated, len(body), proposalRefSize)
+	}
+
+	n := len(body) / proposalRefSize
+	if n > maxRevokeRefs {
+		return fmt.Errorf("%w: %d refs exceeds %d", ErrProposalsTooMany, n, maxRevokeRefs)
+	}
+	refs := make([][]byte, 0, n)
+	for i := 0; i < len(body); i += proposalRefSize {
+		refs = append(refs, append([]byte(nil), body[i:i+proposalRefSize]...))
+	}
+	s.logger.Debug("processProposalBatchLocked: revoke",
+		"ref_count", len(refs),
+		"first_ref", fmt.Sprintf("%x", refs[0][:minInt(16, len(refs[0]))]))
+	if err := s.mlsClient.client.RevokeProposals(
+		context.Background(), s.groupID, refs,
+	); err != nil {
+		return fmt.Errorf("revoke proposals: %w", err)
+	}
+	s.logger.Debug("processProposalBatchLocked: revoke applied",
+		"ref_count", len(refs))
 
 	return nil
 }

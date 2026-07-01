@@ -594,6 +594,15 @@ func (s *session) processAndCommitProposalBatchLocked(proposals []byte) {
 
 		return
 	}
+	// DAVE revoke (operation_type=1) solo quita proposals cacheados; la spec
+	// manda commitear "if there are one or more cached proposals after
+	// processing" (protocol.md:176) — un revoke puro no deja proposals nuevos.
+	if len(proposals) > 0 && proposals[0] == 1 {
+		s.logger.Info("mls revoke processed, no commit needed",
+			"size", len(proposals))
+
+		return
+	}
 	if err := s.commitProposalsLocked(); err != nil {
 		s.logger.Error("failed to commit proposals", "error", err)
 
