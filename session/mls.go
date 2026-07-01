@@ -244,24 +244,24 @@ func readTLSVectorLength(data []byte) (uint32, int, error) {
 	}
 }
 
-func (s *session) processProposalBatchLocked(proposals []byte) error {
+func (s *session) processProposalBatchLocked(proposals []byte) (bool, error) {
 	if len(proposals) == 0 {
 		s.logger.Debug("processProposalBatchLocked: empty proposals")
 
-		return nil
+		return false, nil
 	}
 	if len(s.groupID) == 0 {
 		// DAVE spec §5: if no local group exists, proposals are ignored.
 		s.logger.Debug("processProposalBatchLocked: no group, ignoring proposals")
 
-		return nil
+		return false, nil
 	}
 
 	// DAVE_MLSProposals payload format (after opcode consumed by gateway):
 	// uint8 operation_type || TLSVector<MLSMessage>
 	// operation_type: 0=append, 1=revoke
 	if len(proposals) < 1 {
-		return fmt.Errorf("%w: %d bytes", ErrProposalsTooShort, len(proposals))
+		return false, fmt.Errorf("%w: %d bytes", ErrProposalsTooShort, len(proposals))
 	}
 
 	operationType := proposals[0]
@@ -269,12 +269,12 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 	switch operationType {
 	case 0: // append: TLSVector<MLSMessage> — existing flow below.
 	case 1: // revoke: TLSVector<ProposalRef>
-		return s.processRevokeProposalsLocked(proposals[1:])
+		return false, s.processRevokeProposalsLocked(proposals[1:])
 	default:
 		s.logger.Debug("processProposalBatchLocked: unknown operation_type, ignoring",
 			"operation_type", operationType)
 
-		return nil
+		return false, nil
 	}
 
 	// Parse TLS vector length to get to the raw MLSMessages.
@@ -282,11 +282,11 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 	payload := proposals[1:]
 	vecLen, headerSize, err := readTLSVectorLength(payload)
 	if err != nil {
-		return fmt.Errorf("reading proposals vector length: %w", err)
+		return false, fmt.Errorf("reading proposals vector length: %w", err)
 	}
 	end := headerSize + int(vecLen)
 	if end > len(payload) {
-		return fmt.Errorf("%w: need %d bytes, have %d", ErrProposalsTruncated, end, len(payload))
+		return false, fmt.Errorf("%w: need %d bytes, have %d", ErrProposalsTruncated, end, len(payload))
 	}
 
 	s.logger.Debug("proposals vector parsed",
@@ -296,9 +296,10 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 		"vector_first_32", fmt.Sprintf("%x", payload[headerSize:minInt(headerSize+32, end)]))
 
 	remaining := payload[headerSize:end]
+	acceptedAny := false
 	for i := 0; len(remaining) > 0; i++ {
 		if len(remaining) < 4 {
-			return fmt.Errorf("%w: %d bytes", ErrProposalTooShort, len(remaining))
+			return acceptedAny, fmt.Errorf("%w: %d bytes", ErrProposalTooShort, len(remaining))
 		}
 		wireOriginal := remaining
 		s.logger.Debug("parsing proposal",
@@ -308,24 +309,81 @@ func (s *session) processProposalBatchLocked(proposals []byte) error {
 
 		msg, err := framing.UnmarshalMLSMessage(remaining)
 		if err != nil {
-			return fmt.Errorf("parse proposal message: %w", err)
+			return acceptedAny, fmt.Errorf("parse proposal message: %w", err)
 		}
 
 		wire := msg.Marshal()
 		if len(wire) == 0 {
-			return ErrEmptyProposal
+			return acceptedAny, ErrEmptyProposal
+		}
+
+		userID, ok, err := s.addProposalUserID(msg)
+		if err != nil {
+			// This is a Proposal we couldn't parse or extract an identity from —
+			// not "not an add proposal" (that returns ok=false, err=nil below).
+			// Fail closed: identityBytesToUserID and group.UnmarshalProposal are
+			// the same trusted parsers used elsewhere in this file, so a failure
+			// here on a well-formed message is more likely a crafted edge case
+			// than a benign limitation. Reject rather than let it bypass the
+			// expected-membership check via ProcessPublicMessage.
+			s.logger.Warn("processProposalBatchLocked: rejecting proposal that failed inspection",
+				"error", err,
+				"index", i)
+			remaining = remaining[len(wire):]
+
+			continue
+		}
+		if ok {
+			if _, exists := s.users[userID]; !exists {
+				s.logger.Warn("processProposalBatchLocked: ignoring add proposal for unexpected user",
+					"user_id", userID,
+					"index", i)
+				remaining = remaining[len(wire):]
+
+				continue
+			}
 		}
 
 		// Use original bytes (not re-marshaled) so ProposalRef hash matches gateway's computation.
 		if err := s.mlsClient.client.ProcessPublicMessage(context.Background(), s.groupID, wireOriginal[:len(wire)]); err != nil {
-			return fmt.Errorf("process proposal public message: %w", err)
+			return acceptedAny, fmt.Errorf("process proposal public message: %w", err)
 		}
+		acceptedAny = true
 		remaining = remaining[len(wire):]
 	}
 
 	s.logger.Debug("processProposalBatchLocked: all proposals processed successfully")
 
-	return nil
+	return acceptedAny, nil
+}
+
+func (s *session) addProposalUserID(msg *framing.MLSMessage) (godave.UserID, bool, error) {
+	if msg == nil {
+		return "", false, nil
+	}
+	pubMsg, ok := msg.AsPublic()
+	if !ok || pubMsg == nil {
+		return "", false, nil
+	}
+	data, ok := pubMsg.Content.ProposalData()
+	if !ok {
+		return "", false, nil
+	}
+	proposal, err := group.UnmarshalProposal(data)
+	if err != nil {
+		return "", false, err
+	}
+	if proposal.Type != group.ProposalTypeAdd || proposal.Add == nil || proposal.Add.KeyPackage == nil ||
+		proposal.Add.KeyPackage.LeafNode == nil || proposal.Add.KeyPackage.LeafNode.Credential == nil {
+		return "", false, nil
+	}
+
+	userID, _, err := identityBytesToUserID(proposal.Add.KeyPackage.LeafNode.Credential.Identity)
+	if err != nil {
+		return "", false, err
+	}
+
+	return userID, true, nil
 }
 
 func (s *session) rebuildEpochStateLocked(groupID []byte) (*epochState, error) {
