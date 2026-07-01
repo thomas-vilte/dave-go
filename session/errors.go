@@ -19,4 +19,5 @@ var (
 	ErrExpectedWelcome           = errors.New("session: expected Welcome in MLSMessage")
 	ErrNoCodecForSSRC            = errors.New("session: no codec assigned for ssrc")
 	ErrProposalsTooMany          = errors.New("session: too many proposal refs in revoke batch")
+	ErrNoActiveEpoch             = errors.New("session: no active E2EE epoch")
 )
