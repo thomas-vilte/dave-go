@@ -199,14 +199,20 @@ func TestSessionMove_StaleProposalIgnored_AndNewChannelJoinsCleanly(t *testing.T
 
 	// --- Channel A: Discord adds the bot to an existing group. ---
 	s.OnSelectProtocolAck(1)
+	externalSenderPackage := buildExternalSenderPackage(t)
+	setExternalSenderPackage(t, s, externalSenderPackage)
 	kpA := cb.lastKeyPackage()
 	if len(kpA) == 0 {
 		t.Fatal("expected a key package for channel A")
 	}
 
-	groupA, err := peer.CreateGroup(ctx)
+	peerKP, err := peer.FreshKeyPackageBytes(ctx)
 	if err != nil {
-		t.Fatalf("peer.CreateGroup(A): %v", err)
+		t.Fatalf("peer.FreshKeyPackageBytes(A): %v", err)
+	}
+	groupA, err := peer.CreateGroupWithExternalSender(ctx, []byte("group-A"), peerKP, externalSenderPackage)
+	if err != nil {
+		t.Fatalf("peer.CreateGroupWithExternalSender(A): %v", err)
 	}
 	_, welcomeA, err := peer.InviteMember(ctx, groupA, kpA)
 	if err != nil {
@@ -257,9 +263,13 @@ func TestSessionMove_StaleProposalIgnored_AndNewChannelJoinsCleanly(t *testing.T
 	s.mu.RUnlock()
 
 	// --- Channel B: Discord adds the bot to a new, unrelated group. ---
-	groupB, err := peer.CreateGroup(ctx)
+	peerKP, err = peer.FreshKeyPackageBytes(ctx)
 	if err != nil {
-		t.Fatalf("peer.CreateGroup(B): %v", err)
+		t.Fatalf("peer.FreshKeyPackageBytes(B): %v", err)
+	}
+	groupB, err := peer.CreateGroupWithExternalSender(ctx, []byte("group-B"), peerKP, externalSenderPackage)
+	if err != nil {
+		t.Fatalf("peer.CreateGroupWithExternalSender(B): %v", err)
 	}
 	if bytes.Equal(groupA, groupB) {
 		t.Fatal("test setup error: channel A and B groups must differ")
@@ -312,6 +322,8 @@ func TestCommitSend_ShardNotReady_RollsBackAndNoWatchdog(t *testing.T) {
 
 	// --- Bot joins an established group (channel A). ---
 	s.OnSelectProtocolAck(1)
+	externalSenderPackage := buildExternalSenderPackage(t)
+	setExternalSenderPackage(t, s, externalSenderPackage)
 	botKP := cb.lastKeyPackage()
 	if len(botKP) == 0 {
 		t.Fatal("expected a key package after OnSelectProtocolAck")
@@ -331,9 +343,13 @@ func TestCommitSend_ShardNotReady_RollsBackAndNoWatchdog(t *testing.T) {
 		t.Fatalf("mls.NewClient(peer): %v", err)
 	}
 
-	groupID, err := peer.CreateGroup(ctx)
+	peerKP, err := peer.FreshKeyPackageBytes(ctx)
 	if err != nil {
-		t.Fatalf("peer.CreateGroup: %v", err)
+		t.Fatalf("peer.FreshKeyPackageBytes: %v", err)
+	}
+	groupID, err := peer.CreateGroupWithExternalSender(ctx, []byte("group-shard"), peerKP, externalSenderPackage)
+	if err != nil {
+		t.Fatalf("peer.CreateGroupWithExternalSender: %v", err)
 	}
 
 	_, welcome, err := peer.InviteMember(ctx, groupID, botKP)
