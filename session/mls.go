@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"github.com/thomas-vilte/dave-go/mediakeys"
 	"github.com/thomas-vilte/mls-go"
 	"github.com/thomas-vilte/mls-go/ciphersuite"
+	mlsext "github.com/thomas-vilte/mls-go/extensions"
 	"github.com/thomas-vilte/mls-go/framing"
 	"github.com/thomas-vilte/mls-go/group"
 	"github.com/thomas-vilte/mls-go/keypackages"
@@ -171,6 +173,9 @@ func (s *session) joinPendingWelcomeLocked(welcome []byte) error {
 	if err != nil {
 		return fmt.Errorf("join group from welcome: %w", err)
 	}
+	if valErr := s.validateJoinedWelcomeExternalSenderLocked(groupID); valErr != nil {
+		return valErr
+	}
 
 	// Update groupID immediately so that processCommitLocked and
 	// processProposalBatchLocked target the Welcome-joined group, not any
@@ -184,6 +189,71 @@ func (s *session) joinPendingWelcomeLocked(welcome []byte) error {
 	s.pendingEpoch = epochState
 
 	return nil
+}
+
+func (s *session) validateJoinedWelcomeExternalSenderLocked(groupID []byte) error {
+	if len(s.externalSenderPackage) == 0 {
+		return ErrNoExternalSender
+	}
+
+	expected, err := mlsext.ParseSingleExternalSender(s.externalSenderPackage)
+	if err != nil {
+		return fmt.Errorf("parse expected external sender: %w", err)
+	}
+
+	groupInfoBytes, err := s.mlsClient.client.GroupInfo(context.Background(), groupID)
+	if err != nil {
+		return fmt.Errorf("read group info for external sender validation: %w", err)
+	}
+	groupInfo, err := group.UnmarshalGroupInfo(groupInfoBytes)
+	if err != nil {
+		return fmt.Errorf("parse joined group info: %w", err)
+	}
+
+	var ext *group.Extension
+	for i := range groupInfo.GroupContext.Extensions {
+		if groupInfo.GroupContext.Extensions[i].Type == mlsext.ExtensionTypeExternalSenders {
+			ext = &groupInfo.GroupContext.Extensions[i]
+
+			break
+		}
+	}
+	if ext == nil {
+		return fmt.Errorf("%w: missing external_senders extension", ErrInvalidExternalSender)
+	}
+
+	actual, err := mlsext.UnmarshalExternalSendersExtension(ext.Data)
+	if err != nil {
+		return fmt.Errorf("parse joined external_senders extension: %w", err)
+	}
+	if len(actual.Senders) != 1 {
+		return fmt.Errorf("%w: expected exactly 1 external sender, got %d", ErrInvalidExternalSender, len(actual.Senders))
+	}
+
+	if !externalSenderMatches(expected, &actual.Senders[0]) {
+		return fmt.Errorf("%w: external sender mismatch", ErrInvalidExternalSender)
+	}
+
+	return nil
+}
+
+func externalSenderMatches(expected, actual *mlsext.ExternalSender) bool {
+	if expected == nil || actual == nil || expected.Credential == nil || actual.Credential == nil ||
+		expected.PublicKey == nil || actual.PublicKey == nil {
+		return false
+	}
+
+	expectedPub, err := expected.PublicKey.ECDH()
+	if err != nil {
+		return false
+	}
+	actualPub, err := actual.PublicKey.ECDH()
+	if err != nil {
+		return false
+	}
+
+	return bytes.Equal(expectedPub.Bytes(), actualPub.Bytes()) &&
+		bytes.Equal(expected.Credential.Marshal(), actual.Credential.Marshal())
 }
 
 func (s *session) processCommitLocked(commit []byte) error {

@@ -14,6 +14,7 @@ var (
 	ErrProposalsTruncated        = errors.New("session: proposals vector truncated")
 	ErrProposalTooShort          = errors.New("session: proposal too short")
 	ErrEmptyProposal             = errors.New("session: empty marshaled proposal")
+	ErrInvalidExternalSender     = errors.New("session: invalid external sender for joined welcome")
 	ErrNoExternalSender          = errors.New("session: no external sender package available")
 	ErrNoPreCommitState          = errors.New("session: no pre-commit state to restore")
 	ErrExpectedWelcome           = errors.New("session: expected Welcome in MLSMessage")
