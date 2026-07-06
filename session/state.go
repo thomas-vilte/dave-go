@@ -78,6 +78,12 @@ type Stats struct {
 	// from this session's point of view" — useful to distinguish a brief
 	// blip from a prolonged outage without grepping DEBUG logs.
 	TransportRetryDuration time.Duration
+	// RejectedReplayFrames counts frames that were rejected because the
+	// expanded nonce had already been seen in the current epoch.
+	// A non-zero value indicates a replay attack or a network duplicate that
+	// survived long enough to reach the decryptor after a prior successful
+	// decryption.
+	RejectedReplayFrames uint64
 }
 
 // Reporter is implemented by sessions created with New. Integrators can

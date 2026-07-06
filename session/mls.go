@@ -562,6 +562,7 @@ func (s *session) rebuildEpochStateLocked(groupID []byte) (*epochState, error) {
 		state.senders[memberUserID] = &senderState{
 			ratchet:  ratchet,
 			expander: mediakeys.NewNonceExpander(),
+			replay:   antiReplayWindow{},
 		}
 	}
 

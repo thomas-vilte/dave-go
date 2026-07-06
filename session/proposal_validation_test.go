@@ -58,8 +58,8 @@ func addProposalBytesForIdentity(t *testing.T, s *session, extPriv *ecdsa.Privat
 // how DAVE delivers proposals in reality (protocol.md:166: "Only Add and
 // Remove proposals sent by the voice gateway external sender are allowed").
 // The bot's own ProposeAddMember signs as SenderTypeMember, which the
-// #16 check now rejects; tests must generate proposals the way the gateway
-// actually would.
+// sender/type validation now rejects; tests must generate proposals the way
+// the gateway actually would.
 func addProposalBytesAsExternalSender(t *testing.T, s *session, extPriv *ecdsa.PrivateKey, identity []byte) []byte {
 	t.Helper()
 

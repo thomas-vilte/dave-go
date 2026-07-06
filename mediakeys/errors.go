@@ -11,4 +11,5 @@ var (
 	ErrDisplayableGroupSizeInvalid  = errors.New("mediakeys: displayable code group size must be > 0")
 	ErrDisplayableCodeLenInvalid    = errors.New("mediakeys: displayable code length must be a positive multiple of group size")
 	ErrDisplayableCodeInputTooShort = errors.New("mediakeys: displayable code input shorter than required by code length and group size")
+	ErrGenerationTooFar             = errors.New("mediakeys: generation gap exceeds maximum")
 )

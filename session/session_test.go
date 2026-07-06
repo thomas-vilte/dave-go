@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/disgoorg/godave"
+	"github.com/thomas-vilte/dave-go/frame"
 	"github.com/thomas-vilte/dave-go/mediakeys"
 )
 
@@ -407,4 +408,129 @@ func TestDecrypt_PassthroughGuardWithActiveEpoch(t *testing.T) {
 			t.Fatalf("passthrough altered the frame: got %x, want %x", out[:n], plaintext)
 		}
 	})
+}
+
+func TestDecrypt_ReplayRejected(t *testing.T) {
+	sess := New(nil, "test_user", testCallbacks{}).(*session)
+
+	// Build a sole-member session so we have real key material.
+	sess.mu.Lock()
+	// Minimal sole-member setup: set channel and protocol version.
+	sess.channelID = 987654321
+	sess.protocolVersion = 1
+	// Create a fake epoch with the bot's own UserID as a sender.
+	// We need a real ratchet key to encrypt/decrypt.
+	ratchet, err := mediakeys.NewKeyRatchet(bytes.Repeat([]byte{0xAA}, 16))
+	if err != nil {
+		sess.mu.Unlock()
+		t.Fatalf("NewKeyRatchet: %v", err)
+	}
+	sess.activeEpoch = &epochState{
+		id:      1,
+		groupID: []byte("test-group"),
+		senders: map[godave.UserID]*senderState{
+			"test_user": {
+				ratchet:  ratchet,
+				expander: mediakeys.NewNonceExpander(),
+				replay:   antiReplayWindow{},
+			},
+		},
+	}
+	sess.mu.Unlock()
+
+	// Get the generation-0 key and encrypt a frame with it.
+	key, err := ratchet.GetKey(0)
+	if err != nil {
+		t.Fatalf("GetKey(0): %v", err)
+	}
+
+	plaintext := []byte{0x10, 0x20, 0x30, 0x40, 0x50}
+	encrypted, err := frame.Encrypt(frame.EncryptParams{
+		Plaintext:      plaintext,
+		Key:            key,
+		TruncatedNonce: 0, // nonce 0 → generation 0
+	})
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	// First decrypt must succeed.
+	out := make([]byte, 256)
+	n, err := sess.Decrypt("test_user", encrypted, out)
+	if err != nil {
+		t.Fatalf("first decrypt: %v", err)
+	}
+	if !bytes.Equal(out[:n], plaintext) {
+		t.Fatalf("plaintext mismatch: got %x want %x", out[:n], plaintext)
+	}
+
+	// Second decrypt of the same frame must be rejected as replay.
+	_, err = sess.Decrypt("test_user", encrypted, out)
+	if err == nil {
+		t.Fatal("expected replay rejection on second decrypt")
+	}
+	if !errors.Is(err, ErrDecryptionFailed) {
+		t.Fatalf("expected ErrDecryptionFailed, got %v", err)
+	}
+
+	// Stats must reflect the rejected replay.
+	if got := sess.Stats().RejectedReplayFrames; got != 1 {
+		t.Fatalf("RejectedReplayFrames: got %d want 1", got)
+	}
+}
+
+func TestDecrypt_OutOfOrderAccepted(t *testing.T) {
+	sess := New(nil, "test_user", testCallbacks{}).(*session)
+
+	sess.mu.Lock()
+	sess.channelID = 987654321
+	sess.protocolVersion = 1
+	ratchet, err := mediakeys.NewKeyRatchet(bytes.Repeat([]byte{0xBB}, 16))
+	if err != nil {
+		sess.mu.Unlock()
+		t.Fatalf("NewKeyRatchet: %v", err)
+	}
+	sess.activeEpoch = &epochState{
+		id:      1,
+		groupID: []byte("test-group"),
+		senders: map[godave.UserID]*senderState{
+			"test_user": {
+				ratchet:  ratchet,
+				expander: mediakeys.NewNonceExpander(),
+				replay:   antiReplayWindow{},
+			},
+		},
+	}
+	sess.mu.Unlock()
+
+	// Encrypt frames with nonces 0, 1, 2.
+	plaintext := []byte{0xAA, 0xBB, 0xCC}
+	var frames [3][]byte
+	for i := range 3 {
+		key, err := ratchet.GetKey(0) // all nonce < 2^24 → generation 0
+		if err != nil {
+			t.Fatalf("GetKey(0) for nonce %d: %v", i, err)
+		}
+		frames[i], err = frame.Encrypt(frame.EncryptParams{
+			Plaintext:      plaintext,
+			Key:            key,
+			TruncatedNonce: uint32(i),
+		})
+		if err != nil {
+			t.Fatalf("Encrypt nonce %d: %v", i, err)
+		}
+	}
+
+	// Decrypt out of order: 2, 0, 1 — all must succeed.
+	order := []int{2, 0, 1}
+	out := make([]byte, 256)
+	for _, idx := range order {
+		n, err := sess.Decrypt("test_user", frames[idx], out)
+		if err != nil {
+			t.Fatalf("decrypt frame %d (out of order): %v", idx, err)
+		}
+		if !bytes.Equal(out[:n], plaintext) {
+			t.Fatalf("frame %d: plaintext mismatch", idx)
+		}
+	}
 }
