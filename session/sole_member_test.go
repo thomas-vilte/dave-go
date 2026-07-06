@@ -32,6 +32,17 @@ func writeVLBytes(b []byte) []byte {
 // the voice gateway sends it: VL(signature_public_key) || Credential_inline.
 func buildExternalSenderPackage(t *testing.T) []byte {
 	t.Helper()
+	pkg, _ := buildExternalSenderPackageWithKey(t)
+
+	return pkg
+}
+
+// buildExternalSenderPackageWithKey is like buildExternalSenderPackage but also
+// returns the ECDH private key so tests can sign proposals as the external
+// sender (simulating the gateway, which is how DAVE delivers proposals in
+// reality — not as a group member).
+func buildExternalSenderPackageWithKey(t *testing.T) ([]byte, *ecdsa.PrivateKey) {
+	t.Helper()
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -44,7 +55,7 @@ func buildExternalSenderPackage(t *testing.T) []byte {
 
 	cred := credentials.NewBasicCredentialFromUint64(1)
 
-	return append(writeVLBytes(ecdhPub.Bytes()), cred.Marshal()...)
+	return append(writeVLBytes(ecdhPub.Bytes()), cred.Marshal()...), priv
 }
 
 // TestSoleMemberReset_EncryptsWhileAlone reproduces the DAVE "Sole member reset":

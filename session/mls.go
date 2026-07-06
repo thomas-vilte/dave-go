@@ -387,6 +387,24 @@ func (s *session) processProposalBatchLocked(proposals []byte) (bool, error) {
 			return acceptedAny, ErrEmptyProposal
 		}
 
+		allowed, err := s.proposalAllowedByDAVELocked(msg)
+		if err != nil {
+			// fail closed: if we can't inspect the proposal safely, reject it.
+			s.logger.Warn("processProposalBatchLocked: rejecting proposal that failed inspection",
+				"error", err,
+				"index", i)
+			remaining = remaining[len(wire):]
+
+			continue
+		}
+		if !allowed {
+			s.logger.Warn("processProposalBatchLocked: rejecting disallowed proposal sender/type",
+				"index", i)
+			remaining = remaining[len(wire):]
+
+			continue
+		}
+
 		userID, ok, err := s.addProposalUserID(msg)
 		if err != nil {
 			// This is a Proposal we couldn't parse or extract an identity from —
@@ -425,6 +443,42 @@ func (s *session) processProposalBatchLocked(proposals []byte) (bool, error) {
 	s.logger.Debug("processProposalBatchLocked: all proposals processed successfully")
 
 	return acceptedAny, nil
+}
+
+func (s *session) proposalAllowedByDAVELocked(msg *framing.MLSMessage) (bool, error) {
+	if msg == nil {
+		return false, nil
+	}
+
+	pubMsg, ok := msg.AsPublic()
+	if !ok || pubMsg == nil {
+		return false, nil
+	}
+
+	if pubMsg.Content.Sender.Type != framing.SenderTypeExternal {
+		return false, nil
+	}
+
+	if pubMsg.Content.ContentType() != framing.ContentTypeProposal {
+		return false, nil
+	}
+
+	data, ok := pubMsg.Content.ProposalData()
+	if !ok {
+		return false, nil
+	}
+
+	proposal, err := group.UnmarshalProposal(data)
+	if err != nil {
+		return false, err
+	}
+
+	switch proposal.Type {
+	case group.ProposalTypeAdd, group.ProposalTypeRemove:
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 func (s *session) addProposalUserID(msg *framing.MLSMessage) (godave.UserID, bool, error) {
