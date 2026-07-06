@@ -84,6 +84,11 @@ type Stats struct {
 	// survived long enough to reach the decryptor after a prior successful
 	// decryption.
 	RejectedReplayFrames uint64
+	// DowngradeToV0 counts the number of times the session was downgraded
+	// from DAVE E2EE (protocol version ≥ 1) to transport-only encryption
+	// (protocol version 0). Non-zero indicates the call received at least
+	// one non-supporting client.
+	DowngradeToV0 uint64
 }
 
 // Reporter is implemented by sessions created with New. Integrators can

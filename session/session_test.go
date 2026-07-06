@@ -338,6 +338,7 @@ func TestDecrypt_PassthroughGuardWithActiveEpoch(t *testing.T) {
 		sess := New(nil, "test_user", testCallbacks{}).(*session)
 
 		sess.mu.Lock()
+		sess.protocolVersion = 1
 		sess.activeEpoch = &epochState{id: 1, senders: make(map[godave.UserID]*senderState)}
 		sess.mu.Unlock()
 
@@ -356,6 +357,7 @@ func TestDecrypt_PassthroughGuardWithActiveEpoch(t *testing.T) {
 		sess := New(nil, "test_user", testCallbacks{}).(*session)
 
 		sess.mu.Lock()
+		sess.protocolVersion = 1
 		sess.activeEpoch = &epochState{id: 1, senders: make(map[godave.UserID]*senderState)}
 		sess.mu.Unlock()
 
@@ -373,6 +375,7 @@ func TestDecrypt_PassthroughGuardWithActiveEpoch(t *testing.T) {
 		sess := New(nil, "test_user", testCallbacks{}).(*session)
 
 		sess.mu.Lock()
+		sess.protocolVersion = 1
 		sess.activeEpoch = &epochState{id: 1, senders: make(map[godave.UserID]*senderState)}
 		sess.mu.Unlock()
 
