@@ -2,6 +2,7 @@ package codecs
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/thomas-vilte/dave-go/frame"
@@ -273,9 +274,20 @@ func TestEncryptAV1RoundTrip(t *testing.T) {
 	data := buildOBU(6, false, true, []byte{0xDE, 0xAD, 0xBE, 0xEF})
 	payload := append(td, data...)
 
-	encrypted, err := Encrypt(CodecAV1, payload, key, 10)
+	// The public Encrypt rejects AV1 (#24); exercise the internal codec logic
+	// directly so this keeps validating the AV1 transform round-trips.
+	transformed, ranges, err := prepareAV1Frame(payload)
 	if err != nil {
-		t.Fatalf("Encrypt AV1 error: %v", err)
+		t.Fatalf("prepareAV1Frame error: %v", err)
+	}
+	encrypted, err := frame.Encrypt(frame.EncryptParams{
+		Plaintext:         transformed,
+		Key:               key,
+		TruncatedNonce:    10,
+		UnencryptedRanges: ranges,
+	})
+	if err != nil {
+		t.Fatalf("frame.Encrypt AV1 error: %v", err)
 	}
 	if !frame.LooksLikeDAVEFrame(encrypted) {
 		t.Fatal("resultado no es un frame DAVE válido")
@@ -328,9 +340,20 @@ func TestEncryptVP8RoundTrip(t *testing.T) {
 	// VP8 non-key frame (P=1 in bit 0 of first byte)
 	payload := []byte{0x81, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
 
-	encrypted, err := Encrypt(CodecVP8, payload, key, 5)
+	// The public Encrypt rejects VP8 (#24); exercise the internal range logic
+	// directly so this keeps validating the VP8 round-trip.
+	ranges, err := vp8Ranges(payload)
 	if err != nil {
-		t.Fatalf("Encrypt VP8 error: %v", err)
+		t.Fatalf("vp8Ranges error: %v", err)
+	}
+	encrypted, err := frame.Encrypt(frame.EncryptParams{
+		Plaintext:         payload,
+		Key:               key,
+		TruncatedNonce:    5,
+		UnencryptedRanges: ranges,
+	})
+	if err != nil {
+		t.Fatalf("frame.Encrypt VP8 error: %v", err)
 	}
 
 	decrypted, _, err := frame.Decrypt(frame.DecryptParams{
@@ -342,5 +365,46 @@ func TestEncryptVP8RoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(decrypted, payload) {
 		t.Errorf("plaintext mismatch")
+	}
+}
+
+// ─────────────────────────────────────────────
+// #24: fail-loud for non-Opus codecs
+// ─────────────────────────────────────────────
+
+func TestEncrypt_RejectsVideoCodecs(t *testing.T) {
+	key := bytes.Repeat([]byte{0x08}, 16)
+	gcm, err := frame.NewGCM8(key)
+	if err != nil {
+		t.Fatalf("NewGCM8: %v", err)
+	}
+	payload := []byte{0x01, 0x02, 0x03, 0x04}
+
+	video := []Kind{CodecVP8, CodecVP9, CodecH264, CodecH265, CodecAV1}
+	for _, kind := range video {
+		if _, err := Encrypt(kind, payload, key, 0); !errors.Is(err, ErrCodecNotSupported) {
+			t.Errorf("Encrypt(kind=%d): want ErrCodecNotSupported, got %v", kind, err)
+		}
+		if _, err := EncryptWithCipher(kind, payload, gcm, 0); !errors.Is(err, ErrCodecNotSupported) {
+			t.Errorf("EncryptWithCipher(kind=%d): want ErrCodecNotSupported, got %v", kind, err)
+		}
+		dst := make([]byte, 128)
+		if _, err := EncryptInto(kind, dst, payload, key, 0); !errors.Is(err, ErrCodecNotSupported) {
+			t.Errorf("EncryptInto(kind=%d): want ErrCodecNotSupported, got %v", kind, err)
+		}
+		if _, err := EncryptWithCipherInto(kind, dst, payload, gcm, 0); !errors.Is(err, ErrCodecNotSupported) {
+			t.Errorf("EncryptWithCipherInto(kind=%d): want ErrCodecNotSupported, got %v", kind, err)
+		}
+	}
+}
+
+func TestEncrypt_AllowsOpusAndUnknown(t *testing.T) {
+	key := bytes.Repeat([]byte{0x09}, 16)
+	payload := []byte{0x01, 0x02, 0x03, 0x04}
+
+	for _, kind := range []Kind{CodecOpus, CodecUnknown} {
+		if _, err := Encrypt(kind, payload, key, 0); err != nil {
+			t.Errorf("Encrypt(kind=%d) should be allowed, got %v", kind, err)
+		}
 	}
 }
