@@ -326,3 +326,85 @@ func TestDecryptNoActiveEpoch(t *testing.T) {
 		t.Fatal("expected error when decrypting with no epoch")
 	}
 }
+
+// TestDecrypt_PassthroughGuardWithActiveEpoch covers the E2EE passthrough
+// restriction: when an active epoch is in place, a non-DAVE frame must be
+// rejected unless it is exactly the 3-byte silence packet (0xF8FFFE) the
+// spec allows through (protocol.md:107-111, 633-641). Without an active
+// epoch (v0 / transition / fresh session), passthrough stays permissive.
+func TestDecrypt_PassthroughGuardWithActiveEpoch(t *testing.T) {
+	t.Run("rejects non-dave non-silence under E2EE", func(t *testing.T) {
+		sess := New(nil, "test_user", testCallbacks{}).(*session)
+
+		sess.mu.Lock()
+		sess.activeEpoch = &epochState{id: 1, senders: make(map[godave.UserID]*senderState)}
+		sess.mu.Unlock()
+
+		// Arbitrary non-DAVE plaintext frame, not the silence packet.
+		bad := []byte{0x01, 0x02, 0x03, 0x04}
+		_, err := sess.Decrypt("user1", bad, make([]byte, 64))
+		if err == nil {
+			t.Fatal("expected ErrDecryptionFailed for plaintext injection under E2EE")
+		}
+		if !errors.Is(err, ErrDecryptionFailed) {
+			t.Fatalf("expected ErrDecryptionFailed, got %v", err)
+		}
+	})
+
+	t.Run("rejects non-dave frame of different size under E2EE", func(t *testing.T) {
+		sess := New(nil, "test_user", testCallbacks{}).(*session)
+
+		sess.mu.Lock()
+		sess.activeEpoch = &epochState{id: 1, senders: make(map[godave.UserID]*senderState)}
+		sess.mu.Unlock()
+
+		// A 10-byte frame that is neither a DAVE frame (no 0xFA 0xFA magic)
+		// nor a 3-byte silence packet.
+		bad := make([]byte, 10)
+		bad[0] = 0xAB
+		_, err := sess.Decrypt("user1", bad, make([]byte, 64))
+		if !errors.Is(err, ErrDecryptionFailed) {
+			t.Fatalf("expected ErrDecryptionFailed, got %v", err)
+		}
+	})
+
+	t.Run("allows silence packet under E2EE", func(t *testing.T) {
+		sess := New(nil, "test_user", testCallbacks{}).(*session)
+
+		sess.mu.Lock()
+		sess.activeEpoch = &epochState{id: 1, senders: make(map[godave.UserID]*senderState)}
+		sess.mu.Unlock()
+
+		silence := []byte{0xF8, 0xFF, 0xFE}
+		out := make([]byte, 64)
+		n, err := sess.Decrypt("user1", silence, out)
+		if err != nil {
+			t.Fatalf("silence packet should pass through under E2EE, got error: %v", err)
+		}
+		if n != len(silence) {
+			t.Fatalf("silence passthrough wrote %d bytes, want %d", n, len(silence))
+		}
+		if !bytes.Equal(out[:n], silence) {
+			t.Fatalf("silence passthrough altered the frame: got %x, want %x", out[:n], silence)
+		}
+	})
+
+	t.Run("allows arbitrary non-dave frame when no active epoch", func(t *testing.T) {
+		sess := New(nil, "test_user", testCallbacks{}).(*session)
+
+		// No active epoch: passthrough remains permissive (v0 / transition /
+		// fresh session), regardless of the frame content.
+		plaintext := []byte{0x10, 0x20, 0x30, 0x40, 0x50}
+		out := make([]byte, 64)
+		n, err := sess.Decrypt("user1", plaintext, out)
+		if err != nil {
+			t.Fatalf("expected passthrough without active epoch, got error: %v", err)
+		}
+		if n != len(plaintext) {
+			t.Fatalf("passthrough wrote %d bytes, want %d", n, len(plaintext))
+		}
+		if !bytes.Equal(out[:n], plaintext) {
+			t.Fatalf("passthrough altered the frame: got %x, want %x", out[:n], plaintext)
+		}
+	})
+}

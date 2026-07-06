@@ -370,6 +370,9 @@ func (s *session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 	defer s.mu.RUnlock()
 
 	if !frame.LooksLikeDAVEFrame(frameData) {
+		if s.activeEpoch != nil && !isSilencePacket(frameData) {
+			return 0, ErrDecryptionFailed
+		}
 		n := copy(decryptedFrame, frameData)
 
 		return n, nil
@@ -790,4 +793,13 @@ func toCodecKind(codec godave.Codec) codecs.Kind {
 	default:
 		return codecs.CodecUnknown
 	}
+}
+
+// isSilencePacket reports whether frameData is exactly the 3-byte SFU silence
+// packet (0xF8FFFE) the spec allows through even under active E2EE
+// (protocol.md:633-641). Compared byte-by-byte to avoid allocating a literal
+// slice on every call.
+func isSilencePacket(frameData []byte) bool {
+	return len(frameData) == 3 &&
+		frameData[0] == 0xF8 && frameData[1] == 0xFF && frameData[2] == 0xFE
 }
