@@ -19,6 +19,8 @@ import (
 
 var _ godave.Session = (*session)(nil)
 
+var silencePacket = []byte{0xF8, 0xFF, 0xFE}
+
 type session struct {
 	// logger carries the session's correlation fields (dave_session, user_id and,
 	// once known, channel_id) so every line can be traced back to one connection.
@@ -370,6 +372,9 @@ func (s *session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 	defer s.mu.RUnlock()
 
 	if !frame.LooksLikeDAVEFrame(frameData) {
+		if s.activeEpoch != nil && !isSilencePacket(frameData) {
+			return 0, ErrDecryptionFailed
+		}
 		n := copy(decryptedFrame, frameData)
 
 		return n, nil
@@ -790,4 +795,8 @@ func toCodecKind(codec godave.Codec) codecs.Kind {
 	default:
 		return codecs.CodecUnknown
 	}
+}
+
+func isSilencePacket(frameData []byte) bool {
+	return len(frameData) == 3 && bytes.Equal(frameData, silencePacket)
 }
