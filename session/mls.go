@@ -261,6 +261,12 @@ func (s *session) processCommitLocked(commit []byte) error {
 		return ErrNoActiveGroup
 	}
 
+	// DAVE Client Commit Validity (protocol.md:314): reject commits that
+	// embed proposals inline instead of referencing cached ones.
+	if err := validateCommitProposalRefs(commit); err != nil {
+		return err
+	}
+
 	if err := s.mlsClient.client.ProcessCommit(context.Background(), s.groupID, commit); err != nil {
 		return fmt.Errorf("process commit: %w", err)
 	}
@@ -272,6 +278,39 @@ func (s *session) processCommitLocked(commit []byte) error {
 
 	s.pendingEpoch = epochState
 	s.pendingGroupID = append([]byte(nil), s.groupID...)
+
+	return nil
+}
+
+// validateCommitProposalRefs checks that a serialized commit contains only
+// proposal references (type 2), never inline proposals (type 1). DAVE
+// protocol.md:314 requires that commits reference previously cached proposals
+// rather than embedding them inline.
+func validateCommitProposalRefs(commit []byte) error {
+	msg, err := framing.UnmarshalMLSMessage(commit)
+	if err != nil {
+		return fmt.Errorf("parse commit message: %w", err)
+	}
+
+	pub, ok := msg.AsPublic()
+	if !ok || pub == nil {
+		return fmt.Errorf("%w: commit is not a public message", ErrInlineProposalInCommit)
+	}
+	data, ok := pub.Content.CommitData()
+	if !ok || len(data) == 0 {
+		return fmt.Errorf("%w: no commit data", ErrInlineProposalInCommit)
+	}
+
+	c, err := group.UnmarshalCommit(data)
+	if err != nil {
+		return fmt.Errorf("parse commit body: %w", err)
+	}
+
+	for i, por := range c.Proposals {
+		if por.Proposal != nil {
+			return fmt.Errorf("%w proposal index %d", ErrInlineProposalInCommit, i)
+		}
+	}
 
 	return nil
 }
@@ -516,6 +555,8 @@ func (s *session) rebuildEpochStateLocked(groupID []byte) (*epochState, error) {
 		return nil, fmt.Errorf("list members: %w", err)
 	}
 
+	seen := make(map[godave.UserID]struct{}, len(members))
+
 	epochID, err := s.mlsClient.client.Epoch(context.Background(), groupID)
 	if err != nil {
 		return nil, fmt.Errorf("read epoch: %w", err)
@@ -533,6 +574,11 @@ func (s *session) rebuildEpochStateLocked(groupID []byte) (*epochState, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode member identity: %w", err)
 		}
+
+		if _, dup := seen[memberUserID]; dup {
+			return nil, fmt.Errorf("%w: %s", ErrDuplicateGroupIdentity, memberUserID)
+		}
+		seen[memberUserID] = struct{}{}
 
 		baseSecret, err := mediakeys.DeriveSenderBaseSecret(exporter, senderID)
 		if err != nil {
