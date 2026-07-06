@@ -379,7 +379,13 @@ func (s *session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 	defer s.mu.Unlock()
 
 	if !frame.LooksLikeDAVEFrame(frameData) {
-		if s.activeEpoch != nil && !isSilencePacket(frameData) {
+		// Under active E2EE, a non-DAVE frame is a plaintext injection and is
+		// rejected (only the silence packet is allowed through). But once the
+		// session has been downgraded to transport-only (protocolVersion 0),
+		// passthrough is the expected mode again — even while activeEpoch is
+		// still retained to decrypt in-flight DAVE frames from before the
+		// downgrade — so v0 plaintext frames must pass through.
+		if s.activeEpoch != nil && s.protocolVersion != 0 && !isSilencePacket(frameData) {
 			return 0, ErrDecryptionFailed
 		}
 		n := copy(decryptedFrame, frameData)
@@ -527,6 +533,22 @@ func (s *session) OnDavePrepareTransition(transitionID uint16, protocolVersion u
 		s.activeTransitionID = 0
 		s.activateSoleMemberEpochLocked()
 		s.pendingTransitionID = 0
+
+		return
+	}
+
+	// Downgrade to v0 (protocol.md:124-125): no commit or welcome will arrive,
+	// so the normal op23 path (from OnDaveMLSPrepareCommitTransition /
+	// OnDaveMLSWelcome) never fires. Send ready_for_transition immediately.
+	if protocolVersion == 0 && s.callbacks != nil {
+		s.logger.Debug("downgrade to v0: sending ready_for_transition",
+			"transition_id", transitionID)
+		if err := s.retrySend(func() error {
+			return s.callbacks.SendReadyForTransition(transitionID)
+		}); err != nil {
+			s.logger.Error("failed to send ready_for_transition",
+				"transition_id", transitionID, "error", err)
+		}
 	}
 }
 
@@ -534,8 +556,35 @@ func (s *session) OnDaveExecuteTransition(transitionID uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.logger.Debug("OnDaveExecuteTransition", "transition_id", transitionID, "pending_epoch_set", s.pendingEpoch != nil)
+	s.logger.Debug("OnDaveExecuteTransition",
+		"transition_id", transitionID,
+		"protocol_version", s.protocolVersion,
+		"pending_epoch_set", s.pendingEpoch != nil)
 	s.activeTransitionID = transitionID
+
+	// Downgrade to v0 (protocol.md:129): immediately clear the send-side
+	// so Encrypt falls back to passthrough. Keep activeEpoch for
+	// receive-side retention (in-flight DAVE frames from before the
+	// transition).
+	if s.protocolVersion == 0 {
+		s.stats.DowngradeToV0++
+		s.sendRatchet = nil
+		s.retainedSendRatchet = nil
+		s.retainedSendExpiresAt = time.Time{}
+		s.sendCipher = nil
+		s.sendCipherKey = nil
+		s.pendingEpoch = nil
+		s.pendingGroupID = nil
+		s.pendingCommitBytes = nil
+		s.preCommitGroupState = nil
+		s.groupID = nil
+		s.resetEpochReadyLocked()
+		s.logger.Debug("downgrade to v0 executed: send-side cleared to passthrough",
+			"transition_id", transitionID)
+
+		return
+	}
+
 	s.activatePendingEpochLocked()
 	s.pendingTransitionID = 0
 }
