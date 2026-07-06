@@ -28,6 +28,13 @@ func TestStats_TransitionWindowsIncremented(t *testing.T) {
 
 	s.mu.Lock()
 	s.sendRatchet = oldRatchet
+	// A same-membership transition (re-key) — the only case that retains the
+	// send ratchet. A join would skip retention (the new member holds no
+	// old-epoch keys); see newEpochAddsSender.
+	s.activeEpoch = &epochState{
+		id:      6,
+		senders: map[godave.UserID]*senderState{"123456789": {ratchet: oldRatchet}},
+	}
 	s.pendingEpoch = &epochState{
 		id:      7,
 		groupID: []byte("g"),

@@ -728,6 +728,7 @@ func (s *session) activatePendingEpochLocked() {
 		return
 	}
 
+	oldActive := s.activeEpoch
 	if s.activeEpoch != nil {
 		s.activeEpoch.expiresAt = time.Now().Add(epochRetention)
 		s.retainedEpoch = append(s.retainedEpoch, s.activeEpoch)
@@ -742,18 +743,29 @@ func (s *session) activatePendingEpochLocked() {
 	// — the exact moment protocol.md says "media senders begin using the
 	// new... key ratchet" immediately, with no grace period on the send side
 	// (retention there is receive-side only, see retainedSendRatchet field
-	// doc in session.go). Retaining the previous send ratchet here is a
-	// deliberate extension beyond that literal text: defensive padding
-	// against execute_transition delivery jitter across members, not a
-	// protocol requirement. The new ratchet only takes over from nonce 0
-	// once selectSendRatchetLocked detects the retained ratchet has expired
-	// (matches spec: "When a key ratchet is generated for a new epoch, the
-	// sender resets their nonce to 0" — that part of the reset IS spec-exact,
-	// just deferred).
+	// doc in session.go). Retaining the previous send ratchet is a deliberate
+	// extension beyond that literal text: defensive padding against
+	// execute_transition delivery jitter for receivers that were ALSO in the
+	// previous epoch.
+	//
+	// But when the new epoch ADDED a member (a join), that member was never in
+	// the previous epoch and holds none of its keys — so retaining the old send
+	// ratchet would black out their audio for the entire TTL (~10s), which is
+	// exactly the "no audio for ~10s after re-join" symptom. In that case switch
+	// atomically (spec-compliant) and reset the nonce to 0 so the new epoch's
+	// ratchet starts clean; selectSendRatchetLocked normally does that reset
+	// when the retained ratchet expires, so we must do it here when we skip
+	// retention.
 	if s.sendRatchet != nil {
-		s.retainedSendRatchet = s.sendRatchet
-		s.retainedSendExpiresAt = time.Now().Add(s.sendRetentionTTL)
-		s.stats.TransitionWindows++
+		if newEpochAddsSender(oldActive, s.activeEpoch) {
+			s.sendCounter.Reset()
+			s.retainedSendRatchet = nil
+			s.retainedSendExpiresAt = time.Time{}
+		} else {
+			s.retainedSendRatchet = s.sendRatchet
+			s.retainedSendExpiresAt = time.Now().Add(s.sendRetentionTTL)
+			s.stats.TransitionWindows++
+		}
 	}
 
 	if sender := s.activeEpoch.senders[s.userID]; sender != nil {
@@ -777,6 +789,25 @@ func (s *session) activatePendingEpochLocked() {
 	// activated. Process them one at a time so that each commit can be
 	// queued again if another pending epoch accumulates mid-drain.
 	s.drainProposalQueueLocked()
+}
+
+// newEpochAddsSender reports whether newEpoch contains a member (sender) that
+// was not present in oldEpoch. When it does, retaining the previous send
+// ratchet across the transition would black out the newly-joined member's audio
+// for the full retention TTL: they were never in the old epoch, so they hold
+// none of its keys and cannot decrypt frames the bot keeps sending on the
+// retained ratchet. Treats a nil old epoch as "added" (nothing to retain for).
+func newEpochAddsSender(oldEpoch, newEpoch *epochState) bool {
+	if oldEpoch == nil || newEpoch == nil {
+		return true
+	}
+	for userID := range newEpoch.senders {
+		if _, ok := oldEpoch.senders[userID]; !ok {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *session) drainProposalQueueLocked() {
@@ -1050,8 +1081,19 @@ func (s *session) commitProposalsLocked() error {
 	// commit via op:29 within the timeout, the epoch will never activate.
 	// The goroutine either exits early when epochReady is closed (normal path)
 	// or triggers InvalidCommitWelcome + MLS state reset so Discord re-adds us.
+	//
+	// Reset epochReady to a FRESH channel first: a previous activation (e.g. a
+	// sole-member reset just before this re-add) leaves epochReady closed via
+	// signalEpochReadyLocked, and without this reset the goroutine below would
+	// read that already-closed channel and return immediately — a recovery
+	// watchdog dead on arrival. The fresh channel is only closed when THIS
+	// commit's transition actually activates (activatePendingEpochLocked), so
+	// the watchdog now waits for the right event. WaitReady re-checks the real
+	// ready state after any wake, so a spurious close here is harmless to it.
+	s.resetEpochReadyLocked()
 	ready := s.epochReady
 	transitionID := s.pendingTransitionID
+	timeout := s.recoveryTimeout
 	go func() {
 		select {
 		case <-ready:
@@ -1060,7 +1102,7 @@ func (s *session) commitProposalsLocked() error {
 		case <-s.shutdownCtx.Done():
 			// Session was discarded by the integrator.
 			return
-		case <-time.After(epochRecoveryTimeout):
+		case <-time.After(timeout):
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()

@@ -14,6 +14,7 @@ package codecs
 
 import (
 	"crypto/cipher"
+	"fmt"
 
 	"github.com/thomas-vilte/dave-go/frame"
 )
@@ -31,6 +32,16 @@ const (
 	CodecAV1
 )
 
+// supportedForEncrypt reports whether the DAVE encryptor accepts this codec.
+// dave-go targets audio, so only Opus is supported; Unknown is accepted as a
+// full-encrypt fallback (protocol.md:525: "Processing an unexpected codec...
+// will cause the full frame to be encrypted"), which is also what session maps
+// unassigned SSRCs to. Every video codec is rejected with ErrCodecNotSupported
+// (see errors.go for why).
+func supportedForEncrypt(kind Kind) bool {
+	return kind == CodecOpus || kind == CodecUnknown
+}
+
 // Encrypt encrypts a media frame in a codec-aware way following the DAVE protocol.
 //
 // This is the recommended API for the dave/session layer. It handles each codec's
@@ -43,6 +54,9 @@ const (
 //
 // Reference: protocol.md "Codec Handling".
 func Encrypt(kind Kind, plaintext, key []byte, nonce uint32) ([]byte, error) {
+	if !supportedForEncrypt(kind) {
+		return nil, fmt.Errorf("%w: kind %d", ErrCodecNotSupported, kind)
+	}
 	switch kind {
 	case CodecH264, CodecH265:
 		return encryptH26x(kind, plaintext, key, nonce)
@@ -77,6 +91,9 @@ func Encrypt(kind Kind, plaintext, key []byte, nonce uint32) ([]byte, error) {
 // Use when the caller already has the cipher cached (e.g. session.Encrypt with cached cipher).
 // H264/H265 with start-code retry falls back to Encrypt (requires the key to retry with nonce+1).
 func EncryptWithCipher(kind Kind, plaintext []byte, gcm cipher.AEAD, nonce uint32) ([]byte, error) {
+	if !supportedForEncrypt(kind) {
+		return nil, fmt.Errorf("%w: kind %d", ErrCodecNotSupported, kind)
+	}
 	switch kind {
 	case CodecAV1:
 		transformed, ranges, err := prepareAV1Frame(plaintext)
@@ -111,6 +128,9 @@ func EncryptWithCipher(kind Kind, plaintext []byte, gcm cipher.AEAD, nonce uint3
 // For OPUS/VP9 (no unencrypted ranges) and cap(dst) >= len(plaintext)+16,
 // this performs zero heap allocations. dst and plaintext must not overlap.
 func EncryptInto(kind Kind, dst, plaintext, key []byte, nonce uint32) (int, error) {
+	if !supportedForEncrypt(kind) {
+		return 0, fmt.Errorf("%w: kind %d", ErrCodecNotSupported, kind)
+	}
 	switch kind {
 	case CodecH264, CodecH265:
 		return encryptH26xInto(kind, dst, plaintext, key, nonce)
@@ -150,6 +170,9 @@ func EncryptInto(kind Kind, dst, plaintext, key []byte, nonce uint32) (int, erro
 // back to EncryptInto (requires the key to retry with nonce+1). dst and
 // plaintext must not overlap.
 func EncryptWithCipherInto(kind Kind, dst, plaintext []byte, gcm cipher.AEAD, nonce uint32) (int, error) {
+	if !supportedForEncrypt(kind) {
+		return 0, fmt.Errorf("%w: kind %d", ErrCodecNotSupported, kind)
+	}
 	switch kind {
 	case CodecAV1:
 		transformed, ranges, err := prepareAV1Frame(plaintext)
