@@ -21,4 +21,6 @@ var (
 	ErrNoCodecForSSRC            = errors.New("session: no codec assigned for ssrc")
 	ErrProposalsTooMany          = errors.New("session: too many proposal refs in revoke batch")
 	ErrNoActiveEpoch             = errors.New("session: no active E2EE epoch")
+	ErrInlineProposalInCommit    = errors.New("session: commit contains inline proposals (DAVE requires only references)")
+	ErrDuplicateGroupIdentity    = errors.New("session: duplicate user ID in group after commit")
 )
