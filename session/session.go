@@ -131,6 +131,7 @@ type epochState struct {
 type senderState struct {
 	ratchet  *mediakeys.KeyRatchet
 	expander *mediakeys.NonceExpander
+	replay   antiReplayWindow
 }
 
 func New(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) godave.Session {
@@ -295,7 +296,7 @@ func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 	}
 
 	// Track frames sent via the retained ratchet during the transition
-	// window (useful for observability — see IMPROVEMENTS #8).
+	// window (useful for observability).
 	if s.retainedSendRatchet != nil {
 		s.stats.TransitionFrames++
 	}
@@ -315,6 +316,10 @@ func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 
 		return 0, err
 	}
+	// Our own send counter is monotonic and trusted, so commit the ratchet to
+	// this generation. This keeps the ratchet's base tracking the send position
+	// (bounding future GetKey walks) instead of relying on GetKey to advance it.
+	ratchet.Commit(generation)
 
 	// Reuse the AES-GCM cipher if the key hasn't changed (hot path: same generation).
 	// The ratchet key changes every ~16 frames; recreation is infrequent.
@@ -366,8 +371,12 @@ func (s *session) MaxDecryptedFrameSize(_ godave.UserID, frameSize int) int {
 }
 
 func (s *session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame []byte) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	// Full lock (not RLock): Decrypt mutates per-sender state — the nonce
+	// expander (Commit) and the anti-replay window (checkAndMark) — which are
+	// not safe under concurrent readers. Encrypt already holds a full lock, so
+	// this keeps both media paths consistently serialized per session.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if !frame.LooksLikeDAVEFrame(frameData) {
 		if s.activeEpoch != nil && !isSilencePacket(frameData) {
@@ -403,9 +412,14 @@ func (s *session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 			continue
 		}
 
-		fullNonce := sender.expander.Expand(parsed.TruncatedNonce)
+		// Tentative expansion — does NOT mutate highestSeen. The advance is
+		// committed only after frame authentication succeeds, so a forged
+		// frame can't poison the expander state.
+		fullNonce := sender.expander.ExpandTentative(parsed.TruncatedNonce)
 		generation := uint32(fullNonce >> 24)
 
+		// Bounded generation jump — rejects forged nonces that target a
+		// generation far ahead of the current one (CPU DoS guard).
 		key, err := sender.ratchet.GetKey(generation)
 		if err != nil {
 			lastErr = err
@@ -419,6 +433,19 @@ func (s *session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 		})
 		if err != nil {
 			lastErr = err
+
+			continue
+		}
+
+		// Authentication succeeded — now advance the expander, the ratchet base,
+		// and check anti-replay. All three MUST happen only after GCM tag
+		// verification, so a forged frame can't poison the expander state,
+		// drive the ratchet forward, or be accepted as a replay.
+		sender.expander.Commit(fullNonce)
+		sender.ratchet.Commit(generation)
+		if !sender.replay.checkAndMark(fullNonce) {
+			s.stats.RejectedReplayFrames++
+			lastErr = ErrDecryptionFailed
 
 			continue
 		}

@@ -7,10 +7,16 @@ import (
 )
 
 const (
-	ExporterLabel       = "Discord Secure Frames v0"
-	BaseSecretLen       = 16
-	MediaKeyLen         = 16
-	DefaultRetentionTTL = 10 * time.Second
+	ExporterLabel = "Discord Secure Frames v0"
+	// BaseSecretLen is the required length of a sender base secret.
+	BaseSecretLen = 16
+	// MediaKeyLen is the required length of a derived media key.
+	MediaKeyLen = 16
+	// DefaultMaxGenerationGap is the maximum number of generations a single
+	// GetKey call may advance the ratchet. Larger jumps are rejected to
+	// prevent CPU DoS from forged nonces that target a far-ahead generation.
+	DefaultMaxGenerationGap uint32 = 256
+	DefaultRetentionTTL            = 10 * time.Second
 )
 
 type Exporter interface {

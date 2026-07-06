@@ -77,6 +77,49 @@ func (e *NonceExpander) Expand(truncated uint32) uint64 {
 	return best
 }
 
+// ExpandTentative returns the expanded nonce candidate without mutating state.
+// Use Commit after successful frame authentication to apply the advance.
+// This prevents forged frames from poisoning the expander state.
+func (e *NonceExpander) ExpandTentative(truncated uint32) uint64 {
+	if !e.initialized {
+		return uint64(truncated)
+	}
+
+	baseCycle := e.highestSeen >> 32
+	best := (baseCycle << 32) | uint64(truncated)
+	bestDist := absDiff(best, e.highestSeen)
+
+	if baseCycle > 0 {
+		candidate := ((baseCycle - 1) << 32) | uint64(truncated)
+		if d := absDiff(candidate, e.highestSeen); d < bestDist {
+			best = candidate
+			bestDist = d
+		}
+	}
+
+	candidate := ((baseCycle + 1) << 32) | uint64(truncated)
+	if d := absDiff(candidate, e.highestSeen); d < bestDist {
+		best = candidate
+	}
+
+	return best
+}
+
+// Commit applies the nonce expansion that ExpandTentative computed.
+// Must be called only after the frame carrying this nonce has been
+// authenticated (GCM tag verified). Advances highestSeen if nonce is new.
+func (e *NonceExpander) Commit(nonce uint64) {
+	if !e.initialized {
+		e.initialized = true
+		e.highestSeen = nonce
+
+		return
+	}
+	if nonce > e.highestSeen {
+		e.highestSeen = nonce
+	}
+}
+
 func absDiff(a, b uint64) uint64 {
 	if a > b {
 		return a - b
