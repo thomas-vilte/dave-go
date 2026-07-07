@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+
+## [v0.4.0] - 2026-07-07
+
+[v0.4.0]: https://github.com/thomas-vilte/dave-go/compare/v0.3.2...v0.4.0
+
+In this release, we have significantly strengthened the security and reliability of our end-to-end encryption implementation. We introduced rigorous MLS validation, improved media key handling, and more resilient session management to ensure a secure and stable communication environment.
+
+### 🔒 Security & Protocol Validation
+
+- Implemented strict validation for MLS commit proposals and group identities to ensure secure group membership.
+- Added secure media key ratcheting and nonce expansion to protect media streams from unauthorized access.
+- Introduced a passthrough guard for E2EE to prevent unencrypted data leaks during session transitions.
+- Enhanced validation for proposal senders, types, and external joiners to prevent unauthorized session changes.
+- Added support for processing DAVE revoke proposals and handling protocol v0 downgrades for better compatibility.
+
+### 🚀 Session Reliability & Performance
+
+- Improved session robustness with comprehensive recovery and retention testing to ensure stable connections.
+- Implemented exponential backoff and interruptible retries for more resilient network operations under poor conditions.
+- Added a WaitReady method to allow applications to synchronize with E2EE session readiness.
+- Introduced a Closer interface to ensure graceful teardown of resources and prevent memory leaks.
+- Enhanced tracking of recovery and transition statistics for better observability and debugging.
+
+### 🛠️ Media & Protocol Enhancements
+
+- Refined media handling and epoch transitions for smoother stream continuity during key rotations.
+- Exposed the MLS epoch authenticator to support out-of-band verification of session security.
+- Provided access to the protocol version to help applications determine E2EE feature availability.
+
+### 🐛 Bug Fixes
+
+- Resolved an issue where the E2EE indicator would flicker during epoch transitions.
+- Fixed a bug that caused the recovery watchdog to re-arm unnecessarily during transport failures.
+
 ## [v0.3.2] - 2026-06-29
 
 [v0.3.2]: https://github.com/thomas-vilte/dave-go/compare/v0.3.1...v0.3.2
