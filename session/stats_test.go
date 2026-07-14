@@ -13,7 +13,7 @@ import (
 // increments TransitionWindows, without touching TransitionFrames.
 func TestStats_TransitionWindowsIncremented(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 	s.sendRetentionTTL = 50 * time.Millisecond
 
 	// Simulate an "old" ratchet that gets retained when the new epoch activates.
@@ -85,7 +85,7 @@ func TestStats_TransitionWindowsIncremented(t *testing.T) {
 // markRecoveredLocked across multiple cycles.
 func TestStats_DegradedDurationAccumulated(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 
 	s.mu.Lock()
 	s.markDegradedLocked("test reason")
@@ -129,7 +129,7 @@ func TestStats_DegradedDurationAccumulated(t *testing.T) {
 // must leave the transport counter untouched.
 func TestStats_RecoveryAttemptsNotTransportOnMLSFault(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 	s.recoveryTimeout = 5 * time.Millisecond
 
 	s.mu.Lock()

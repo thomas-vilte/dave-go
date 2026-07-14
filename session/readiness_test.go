@@ -11,7 +11,7 @@ import (
 // update it (SELECT_PROTOCOL_ACK, PREPARE_EPOCH, PREPARE_TRANSITION).
 func TestState_ProtocolVersionExposed(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 
 	// Before any opcode: v0, Ready false.
 	st := s.State()
@@ -49,7 +49,7 @@ func TestState_ProtocolVersionExposed(t *testing.T) {
 // the handshake.
 func TestState_ReadyFalse_DistinguishesV0_FromHandshake(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 
 	// Stable v0: Ready=false && ProtocolVersion=0 → "no E2EE forever".
 	st := s.State()
@@ -97,7 +97,7 @@ func TestState_ReadyFalse_DistinguishesV0_FromHandshake(t *testing.T) {
 // paths, and a transient handshake doesn't let it proceed by mistake.
 func TestReady_PatternGateReadyOrV0(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 
 	// Stable v0: the "proceed" pattern (passthrough forever).
 	st := s.State()
@@ -127,5 +127,37 @@ func TestReady_PatternGateReadyOrV0(t *testing.T) {
 	proceed = st.Ready || st.ProtocolVersion == 0
 	if !proceed {
 		t.Fatal("Ready=true should allow proceed")
+	}
+}
+
+// TestShouldHoldFrames verifies the method encodes the recommended gate
+// across the three states: stable v0 (don't hold — passthrough forever),
+// transient handshake (hold), and Ready (don't hold).
+func TestShouldHoldFrames(t *testing.T) {
+	cb := &kpCapturingCallbacks{}
+	s := New("123456789", cb)
+
+	// Stable v0: no E2EE coming, never hold.
+	if s.ShouldHoldFrames() {
+		t.Fatal("ShouldHoldFrames=true on stable v0, want false")
+	}
+
+	// Transient handshake: E2EE expected but not established — hold.
+	s.OnSelectProtocolAck(1)
+	if !s.ShouldHoldFrames() {
+		t.Fatal("ShouldHoldFrames=false during handshake, want true")
+	}
+
+	// Epoch active: ready to encrypt, don't hold.
+	ratchet, err := mediakeys.NewKeyRatchet(make([]byte, mediakeys.BaseSecretLen))
+	if err != nil {
+		t.Fatalf("NewKeyRatchet: %v", err)
+	}
+	s.mu.Lock()
+	s.sendRatchet = ratchet
+	s.activeEpoch = &epochState{id: 4, groupID: []byte("g")}
+	s.mu.Unlock()
+	if s.ShouldHoldFrames() {
+		t.Fatal("ShouldHoldFrames=true while Ready, want false")
 	}
 }

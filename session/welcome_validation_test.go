@@ -11,7 +11,7 @@ import (
 	memorystore "github.com/thomas-vilte/mls-go/storage/memory"
 )
 
-func setExternalSenderPackage(t *testing.T, s *session, pkg []byte) {
+func setExternalSenderPackage(t *testing.T, s *Session, pkg []byte) {
 	t.Helper()
 
 	s.mu.Lock()
@@ -62,7 +62,7 @@ func newWelcomeForExternalSender(t *testing.T, botKP, externalSenderPackage []by
 
 func TestOnDaveMLSWelcome_ValidatesExternalSender(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 	s.SetChannelID(987654321)
 	s.OnSelectProtocolAck(1)
 	botKP := cb.lastKeyPackage()
@@ -98,7 +98,7 @@ func TestOnDaveMLSWelcome_ValidatesExternalSender(t *testing.T) {
 
 func TestOnDaveMLSWelcome_RejectsMismatchedExternalSender(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 	s.SetChannelID(987654321)
 	s.OnSelectProtocolAck(1)
 	botKP := cb.lastKeyPackage()

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
-	"github.com/thomas-vilte/mls-go/schedule"
 )
 
 func TestExportWithMLSExporterSecretMatchesDiscordMLS(t *testing.T) {
@@ -43,9 +42,15 @@ func TestExportWithMLSExporterSecretMatchesDiscordMLS(t *testing.T) {
 }
 
 func TestExportWithMLSExporterSecretDiffersFromRFCExporter(t *testing.T) {
-	// Discord DAVE uses mlspp which uses "exported" in ExpandWithLabel step 2.
-	// RFC 9420 §8.5 and mls-go's schedule.Exporter use "exporter".
-	// These MUST produce different outputs — confirming we match Discord, not pure RFC.
+	// Discord DAVE uses mlspp, which uses "exported" in ExpandWithLabel step 2.
+	// RFC 9420 §8.5 uses "exporter". These MUST produce different outputs —
+	// confirming we match Discord/mlspp, not pure RFC.
+	//
+	// The RFC reference is computed by hand here rather than via
+	// schedule.Exporter: as of mls-go v1.6.0 that function was aligned to mlspp
+	// ("exported") for DAVE, so it can no longer stand in for the RFC "exporter"
+	// derivation. dave-go's own derivation is unaffected — it hardcodes
+	// "exported" — but the guard must reference the real RFC construction.
 	exporterSecret := ciphersuite.NewSecret([]byte{
 		0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
 		0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
@@ -59,12 +64,22 @@ func TestExportWithMLSExporterSecretDiffersFromRFCExporter(t *testing.T) {
 		t.Fatalf("ExportWithMLSExporterSecret error: %v", err)
 	}
 
-	rfcExport, err := schedule.Exporter(exporterSecret, ciphersuite.MLS128DHKEMP256, ExporterLabel, ctx, BaseSecretLen)
+	// RFC 9420 §8.5: ExpandWithLabel(DeriveSecret(es, Label), "exporter", Hash(Context), Length).
+	derivedSecret, err := exporterSecret.DeriveSecret(ciphersuite.MLS128DHKEMP256, ExporterLabel)
 	if err != nil {
-		t.Fatalf("schedule.Exporter error: %v", err)
+		t.Fatalf("DeriveSecret error: %v", err)
 	}
+	contextHash, err := ciphersuite.Hash(ciphersuite.MLS128DHKEMP256, ctx)
+	if err != nil {
+		t.Fatalf("Hash error: %v", err)
+	}
+	rfcSecret, err := derivedSecret.KdfExpandLabel("exporter", contextHash, BaseSecretLen)
+	if err != nil {
+		t.Fatalf("KdfExpandLabel error: %v", err)
+	}
+	rfcExport := rfcSecret.AsSlice()
 
 	if bytes.Equal(discordExport, rfcExport) {
-		t.Fatalf("ExportWithMLSExporterSecret (Discord/mlspp) must NOT equal schedule.Exporter (RFC 9420): both produced %x", discordExport)
+		t.Fatalf("ExportWithMLSExporterSecret (mlspp \"exported\") must NOT equal the RFC 9420 \"exporter\" derivation: both produced %x", discordExport)
 	}
 }

@@ -24,9 +24,9 @@ func makeTestRatchet(t *testing.T) *mediakeys.KeyRatchet {
 // newTransitionTestSession sets up a session with an active epoch and a
 // real send ratchet so Encrypt can encrypt. sendRetentionTTL is short so
 // the transition-expiry tests don't take 10s.
-func newTransitionTestSession(t *testing.T) *session {
+func newTransitionTestSession(t *testing.T) *Session {
 	t.Helper()
-	s := newSession(nil, "123456789", testCallbacks{})
+	s := New("123456789", testCallbacks{})
 	s.SetChannelID(42)
 	s.AssignSsrcToCodec(1, godave.CodecOpus)
 	s.sendRetentionTTL = 50 * time.Millisecond
@@ -166,7 +166,7 @@ func TestEncrypt_UsesRetainedAfterProtocolReset(t *testing.T) {
 // test for the fresh-session passthrough path: with neither retained nor
 // sendRatchet, Encrypt must not panic and must passthrough.
 func TestEncrypt_FallsToPassthroughIfNoRetainedAndNoRatchet(t *testing.T) {
-	s := newSession(nil, "123456789", testCallbacks{})
+	s := New("123456789", testCallbacks{})
 
 	plaintext := []byte{0x10, 0x20, 0x30}
 	out := make([]byte, 64)

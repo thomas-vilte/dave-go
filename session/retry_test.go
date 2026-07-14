@@ -14,8 +14,8 @@ func init() {
 	retryDelay = 0
 }
 
-func newTestSession() *session {
-	return New(slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)), "user-1", &kpCapturingCallbacks{}).(*session)
+func newTestSession() *Session {
+	return New("user-1", &kpCapturingCallbacks{}, WithLogger(slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))))
 }
 
 func TestRetrySend_SucceedsOnFirstAttempt(t *testing.T) {
@@ -163,7 +163,7 @@ func TestRetrySend_HonorsClose(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Close should cancel shutdownCtx and unblock the sleep.
-	s.Close()
+	_ = s.Close()
 
 	select {
 	case err := <-done:
@@ -282,7 +282,7 @@ func TestRetrySend_TransportRetryDurationCountsPartialWaitOnClose(t *testing.T) 
 	}()
 
 	time.Sleep(20 * time.Millisecond)
-	s.Close()
+	_ = s.Close()
 
 	select {
 	case err := <-done:

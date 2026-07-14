@@ -53,10 +53,10 @@ func (c *downgradeCallbacks) readyTransitionIDs() []uint16 {
 
 // newDowngradeTestSession creates a session with an active epoch and send ratchet
 // so the downgrade can clear it. sendRetentionTTL is short for test speed.
-func newDowngradeTestSession(t *testing.T) (*session, *downgradeCallbacks) {
+func newDowngradeTestSession(t *testing.T) (*Session, *downgradeCallbacks) {
 	t.Helper()
 	cb := &downgradeCallbacks{}
-	s := newSession(nil, "123456789", cb)
+	s := New("123456789", cb)
 	s.SetChannelID(42)
 	s.AssignSsrcToCodec(1, godave.CodecOpus)
 	s.sendRetentionTTL = 50 * time.Millisecond

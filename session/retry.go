@@ -36,7 +36,7 @@ func isShardNotReady(err error) bool {
 //
 // s.mu must be held by the caller; it remains held throughout (including
 // during sleeps) so callers don't need to re-validate state after each attempt.
-func (s *session) retrySend(fn func() error) error {
+func (s *Session) retrySend(fn func() error) error {
 	delay := retryDelay
 
 	// retryStart is set the first time we decide to retry (i.e. the first

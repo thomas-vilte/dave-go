@@ -114,7 +114,7 @@ func identityBytesToUserID(identity []byte) (godave.UserID, uint64, error) {
 	return godave.UserID(strconv.FormatUint(n, 10)), n, nil
 }
 
-func (s *session) ensureMLSClientLocked() error {
+func (s *Session) ensureMLSClientLocked() error {
 	if s.mlsClient != nil {
 		return nil
 	}
@@ -140,7 +140,7 @@ func (s *session) ensureMLSClientLocked() error {
 	return nil
 }
 
-func (s *session) ensurePendingKeyPackageLocked() error {
+func (s *Session) ensurePendingKeyPackageLocked() error {
 	if err := s.ensureMLSClientLocked(); err != nil {
 		return err
 	}
@@ -168,7 +168,7 @@ func (s *session) ensurePendingKeyPackageLocked() error {
 	return nil
 }
 
-func (s *session) joinPendingWelcomeLocked(welcome []byte) error {
+func (s *Session) joinPendingWelcomeLocked(welcome []byte) error {
 	groupID, err := s.mlsClient.client.JoinGroup(context.Background(), welcome)
 	if err != nil {
 		return fmt.Errorf("join group from welcome: %w", err)
@@ -191,7 +191,7 @@ func (s *session) joinPendingWelcomeLocked(welcome []byte) error {
 	return nil
 }
 
-func (s *session) validateJoinedWelcomeExternalSenderLocked(groupID []byte) error {
+func (s *Session) validateJoinedWelcomeExternalSenderLocked(groupID []byte) error {
 	if len(s.externalSenderPackage) == 0 {
 		return ErrNoExternalSender
 	}
@@ -256,7 +256,7 @@ func externalSenderMatches(expected, actual *mlsext.ExternalSender) bool {
 		bytes.Equal(expected.Credential.Marshal(), actual.Credential.Marshal())
 }
 
-func (s *session) processCommitLocked(commit []byte) error {
+func (s *Session) processCommitLocked(commit []byte) error {
 	if len(s.groupID) == 0 {
 		return ErrNoActiveGroup
 	}
@@ -353,7 +353,7 @@ func readTLSVectorLength(data []byte) (uint32, int, error) {
 	}
 }
 
-func (s *session) processProposalBatchLocked(proposals []byte) (bool, error) {
+func (s *Session) processProposalBatchLocked(proposals []byte) (bool, error) {
 	if len(proposals) == 0 {
 		s.logger.Debug("processProposalBatchLocked: empty proposals")
 
@@ -484,7 +484,7 @@ func (s *session) processProposalBatchLocked(proposals []byte) (bool, error) {
 	return acceptedAny, nil
 }
 
-func (s *session) proposalAllowedByDAVELocked(msg *framing.MLSMessage) (bool, error) {
+func (s *Session) proposalAllowedByDAVELocked(msg *framing.MLSMessage) (bool, error) {
 	if msg == nil {
 		return false, nil
 	}
@@ -520,7 +520,7 @@ func (s *session) proposalAllowedByDAVELocked(msg *framing.MLSMessage) (bool, er
 	}
 }
 
-func (s *session) addProposalUserID(msg *framing.MLSMessage) (godave.UserID, bool, error) {
+func (s *Session) addProposalUserID(msg *framing.MLSMessage) (godave.UserID, bool, error) {
 	if msg == nil {
 		return "", false, nil
 	}
@@ -549,7 +549,7 @@ func (s *session) addProposalUserID(msg *framing.MLSMessage) (godave.UserID, boo
 	return userID, true, nil
 }
 
-func (s *session) rebuildEpochStateLocked(groupID []byte) (*epochState, error) {
+func (s *Session) rebuildEpochStateLocked(groupID []byte) (*epochState, error) {
 	members, err := s.mlsClient.client.ListMembers(context.Background(), groupID)
 	if err != nil {
 		return nil, fmt.Errorf("list members: %w", err)
@@ -627,7 +627,7 @@ func minInt(a, b int) int {
 // transition once. The matching "session recovered" line (markRecoveredLocked)
 // is logged when an epoch is next activated, so the pair brackets the outage in
 // the logs — useful to find exactly when and why a stuck session started failing.
-func (s *session) markDegradedLocked(reason string, args ...any) {
+func (s *Session) markDegradedLocked(reason string, args ...any) {
 	if !s.degradedSince.IsZero() {
 		return // already degraded: don't reset the clock or repeat the log
 	}
@@ -638,7 +638,7 @@ func (s *session) markDegradedLocked(reason string, args ...any) {
 // EpochAuthenticator returns the raw epoch authenticator for the active MLS
 // epoch (RFC 9420 §8.2, via mls-go). Returns ErrNoActiveEpoch if no epoch
 // is active or no MLS group has been established.
-func (s *session) EpochAuthenticator(ctx context.Context) ([]byte, error) {
+func (s *Session) EpochAuthenticator(ctx context.Context) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mlsClient == nil || len(s.groupID) == 0 {
@@ -660,7 +660,7 @@ func (s *session) EpochAuthenticator(ctx context.Context) ([]byte, error) {
 // EpochAuthenticatorCode returns the epoch authenticator as a 30-digit
 // displayable code per protocol.md "Displayable Codes". Same string Discord
 // first-party clients show for out-of-band verification.
-func (s *session) EpochAuthenticatorCode(ctx context.Context) (string, error) {
+func (s *Session) EpochAuthenticatorCode(ctx context.Context) (string, error) {
 	secret, err := s.EpochAuthenticator(ctx)
 	if err != nil {
 		return "", err
@@ -671,7 +671,7 @@ func (s *session) EpochAuthenticatorCode(ctx context.Context) (string, error) {
 
 // markRecoveredLocked logs the recovery and clears the degraded clock if the
 // session had been degraded; no-op otherwise.
-func (s *session) markRecoveredLocked(epochID uint64) {
+func (s *Session) markRecoveredLocked(epochID uint64) {
 	if s.degradedSince.IsZero() {
 		return
 	}
@@ -690,7 +690,7 @@ func (s *session) markRecoveredLocked(epochID uint64) {
 // did not resend it. If there is no external sender context (a protocol-version-0
 // session) this is a no-op and the session stays in passthrough. Must be called
 // with s.mu held.
-func (s *session) activateSoleMemberEpochLocked() {
+func (s *Session) activateSoleMemberEpochLocked() {
 	if len(s.groupID) == 0 {
 		if len(s.externalSenderPackage) == 0 {
 			// No E2EE context yet (e.g. protocol version 0): stay in passthrough.
@@ -717,7 +717,7 @@ func (s *session) activateSoleMemberEpochLocked() {
 	s.activatePendingEpochLocked()
 }
 
-func (s *session) activatePendingEpochLocked() {
+func (s *Session) activatePendingEpochLocked() {
 	s.logger.Debug("activatePendingEpochLocked called",
 		"pending_epoch_set", s.pendingEpoch != nil,
 		"active_epoch_set", s.activeEpoch != nil,
@@ -810,7 +810,7 @@ func newEpochAddsSender(oldEpoch, newEpoch *epochState) bool {
 	return false
 }
 
-func (s *session) drainProposalQueueLocked() {
+func (s *Session) drainProposalQueueLocked() {
 	for len(s.proposalQueue) > 0 && s.pendingEpoch == nil {
 		next := s.proposalQueue[0]
 		s.proposalQueue = s.proposalQueue[1:]
@@ -819,7 +819,7 @@ func (s *session) drainProposalQueueLocked() {
 	}
 }
 
-func (s *session) pruneRetainedEpochsLocked() {
+func (s *Session) pruneRetainedEpochsLocked() {
 	now := time.Now()
 	dst := s.retainedEpoch[:0]
 	for _, epoch := range s.retainedEpoch {
@@ -833,7 +833,7 @@ func (s *session) pruneRetainedEpochsLocked() {
 	s.retainedEpoch = dst
 }
 
-func (s *session) createGroupWithExternalSenderLocked() error {
+func (s *Session) createGroupWithExternalSenderLocked() error {
 	if len(s.groupID) > 0 {
 		return nil // group already created
 	}
@@ -872,7 +872,7 @@ func (s *session) createGroupWithExternalSenderLocked() error {
 // just before the last commit. Called when Discord DS echoes a different commit
 // (i.e. another member's commit won) so that processCommitLocked can apply the
 // winning commit from the correct base epoch. Must be called with s.mu held.
-func (s *session) restorePreCommitStateLocked() error {
+func (s *Session) restorePreCommitStateLocked() error {
 	if len(s.preCommitGroupState) == 0 {
 		return ErrNoPreCommitState
 	}
@@ -900,7 +900,7 @@ func (s *session) restorePreCommitStateLocked() error {
 // key package cannot leave either. The cleanest path is to wait for the
 // gateway to reconnect, which triggers a fresh OnSelectProtocolAck that
 // resets the session from scratch. Must be called with s.mu held.
-func (s *session) invalidateAndResendKeyPackageLocked() {
+func (s *Session) invalidateAndResendKeyPackageLocked() {
 	s.mlsClient = nil
 	s.groupID = nil
 	s.pendingGroupID = nil
@@ -936,7 +936,7 @@ func (s *session) invalidateAndResendKeyPackageLocked() {
 // an active epoch and every Encrypt fails (audio goes silent forever).
 // Retry the invalid-commit signal a bounded number of times, then surface
 // the failure. Must be called with s.mu held.
-func (s *session) watchRecoveryLocked() {
+func (s *Session) watchRecoveryLocked() {
 	if s.recoveryAttempts >= maxRecoveryAttempts {
 		s.logger.Error("session did not recover after repeated invalidations; a full voice reconnect is required",
 			"attempts", s.recoveryAttempts)
@@ -980,7 +980,7 @@ func (s *session) watchRecoveryLocked() {
 	}()
 }
 
-func (s *session) commitProposalsLocked() error {
+func (s *Session) commitProposalsLocked() error {
 	s.logger.Debug("commitProposalsLocked: starting commit", "group_id", fmt.Sprintf("%x", s.groupID))
 
 	// Snapshot the pre-commit group state. If Discord DS accepts a competing
@@ -1135,7 +1135,7 @@ const maxRevokeRefs = 256
 // (protocol.md:1020-1048): payload = TLSVector<ProposalRef>, each ref 32 bytes.
 // Delegates to mls.Client.RevokeProposals, which removes the proposals from
 // the local pending store and proposalByRef lookup; idempotent.
-func (s *session) processRevokeProposalsLocked(payload []byte) error {
+func (s *Session) processRevokeProposalsLocked(payload []byte) error {
 	vecLen, headerSize, err := readTLSVectorLength(payload)
 	if err != nil {
 		return fmt.Errorf("reading revoke vector length: %w", err)

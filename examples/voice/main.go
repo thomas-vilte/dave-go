@@ -51,7 +51,7 @@ func main() {
 			go play(e.Client())
 		}),
 		bot.WithVoiceManagerConfigOpts(
-			voice.WithDaveSessionCreateFunc(session.New),
+			voice.WithDaveSessionCreateFunc(session.CreateFunc()),
 		),
 	)
 	if err != nil {

@@ -25,9 +25,9 @@ func newRatchet(t *testing.T, b byte) *mediakeys.KeyRatchet {
 // the bot as sender) and whose pending epoch is `newMembers`, ready for
 // activatePendingEpochLocked. The send counter is advanced so a reset is
 // observable.
-func setupForActivation(t *testing.T, oldMembers, newMembers []godave.UserID) *session {
+func setupForActivation(t *testing.T, oldMembers, newMembers []godave.UserID) *Session {
 	t.Helper()
-	s := New(nil, "bot", testCallbacks{}).(*session)
+	s := New("bot", testCallbacks{})
 	bot := s.userID
 
 	oldSenders := map[godave.UserID]*senderState{}

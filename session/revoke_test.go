@@ -20,7 +20,7 @@ func buildRevokeBatch(refs []byte) []byte {
 // (valid refs → g.RevokeProposal) is covered in mls-go with a real peer.
 func TestProcessRevokeProposalsLocked_WireFormat(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 	// OnSelectProtocolAck with a non-zero version initializes s.mlsClient (see
 	// ensureMLSClientLocked in mls.go). Without this, RevokeProposals would
 	// panic on s.mlsClient == nil.
@@ -77,7 +77,7 @@ func TestProcessRevokeProposalsLocked_WireFormat(t *testing.T) {
 // no-op by design (idempotent), and our early return skips the commit.
 func TestOnDaveMLSProposals_RevokeSkipsCommit(t *testing.T) {
 	cb := &commitCountingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 	s.OnSelectProtocolAck(1) // builds mlsClient
 
 	// Set an arbitrary groupID (not present in the store) to pass the

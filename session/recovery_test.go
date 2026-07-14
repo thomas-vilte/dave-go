@@ -41,9 +41,9 @@ func (c *countingCallbacks) counts() (invalidCommits, keyPackages int) {
 	return c.invalidCommits, c.keyPackages
 }
 
-func newRecoveryTestSession(t *testing.T, cb godave.Callbacks) *session {
+func newRecoveryTestSession(t *testing.T, cb godave.Callbacks) *Session {
 	t.Helper()
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 	s.recoveryTimeout = 10 * time.Millisecond
 	// The session only generates key packages after the gateway selected the
 	// DAVE protocol version.

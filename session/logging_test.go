@@ -11,7 +11,7 @@ func TestSessionLoggerCarriesCorrelationFields(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	s := New(logger, "user-1", &kpCapturingCallbacks{}).(*session)
+	s := New("user-1", &kpCapturingCallbacks{}, WithLogger(logger))
 
 	s.logger.Info("before channel")
 	first := buf.String()
@@ -39,7 +39,7 @@ func TestSessionLoggerCarriesCorrelationFields(t *testing.T) {
 func TestMarkDegraded_LogsTransitionOnce(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	s := New(logger, "user-1", &kpCapturingCallbacks{}).(*session)
+	s := New("user-1", &kpCapturingCallbacks{}, WithLogger(logger))
 
 	s.markDegradedLocked("first reason", "epoch_id", uint64(5))
 	s.markDegradedLocked("second reason")
