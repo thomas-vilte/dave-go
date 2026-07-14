@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v0.5.0] - 2026-07-14
+
+[v0.5.0]: https://github.com/thomas-vilte/dave-go/compare/v0.4.0...v0.5.0
+
+In this release, we focused on expanding channel interaction capabilities and modernizing our internal API structure. We've introduced more robust channel handling and upgraded our core messaging dependencies to provide a more stable foundation.
+
+### 📡 Channel Management
+
+- We added support for handling channel movements and follow modes, enabling more dynamic interactions within the platform.
+
+### 🔧 Developer Experience & Stability
+
+- We introduced functional options to provide a more flexible and idiomatic way to configure the library.
+- We upgraded the core mls-go dependency to v1.6.0 to ensure better performance and compatibility with the latest messaging standards.
+
 ## [v0.4.0] - 2026-07-07
 
 [v0.4.0]: https://github.com/thomas-vilte/dave-go/compare/v0.3.2...v0.4.0
