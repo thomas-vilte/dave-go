@@ -96,7 +96,7 @@ func (c *shardDownCallbacks) invalidCommitCount() int {
 // package.
 func TestOnSelectProtocolAck_DiscardsPreviousChannelState(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 
 	// Initial connection to channel A.
 	s.OnSelectProtocolAck(1)
@@ -182,7 +182,7 @@ func TestOnSelectProtocolAck_DiscardsPreviousChannelState(t *testing.T) {
 func TestSessionMove_StaleProposalIgnored_AndNewChannelJoinsCleanly(t *testing.T) {
 	ctx := context.Background()
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 
 	peerStore := memorystore.NewStore()
 	peerIdentity, err := userIDToIdentityBytes("987654321")
@@ -317,7 +317,7 @@ func buildProposalBatch(proposalBytes []byte) []byte {
 func TestCommitSend_ShardNotReady_RollsBackAndNoWatchdog(t *testing.T) {
 	ctx := context.Background()
 	cb := &shardDownCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 	s.recoveryTimeout = 10 * time.Millisecond
 
 	// --- Bot joins an established group (channel A). ---

@@ -91,32 +91,10 @@ type Stats struct {
 	DowngradeToV0 uint64
 }
 
-// Reporter is implemented by sessions created with New. Integrators can
-// type-assert the godave.Session to observe session health and export it
-// with their own metrics stack; the library takes no telemetry dependency.
-type Reporter interface {
-	State() State
-	Stats() Stats
-	WaitReady(ctx context.Context) (time.Duration, error)
-	// EpochAuthenticator returns the raw epoch authenticator secret (32
-	// bytes for MLS ciphersuite 2 / DHKEMP256, the DAVE-mandated one) for
-	// the active MLS epoch, per RFC 9420 §8.2. All members of the same
-	// group in the same epoch get the same value; it changes whenever a
-	// commit advances the epoch. Returns ErrNoActiveEpoch if no E2EE
-	// epoch is active.
-	EpochAuthenticator(ctx context.Context) ([]byte, error)
-	// EpochAuthenticatorCode returns the epoch authenticator rendered as
-	// a 30-digit displayable code (6 groups of 5 digits, no separators)
-	// per protocol.md "Displayable Codes". This is the same string Discord
-	// first-party clients show for out-of-band verification — members
-	// compare it to confirm their view of the group matches. Returns
-	// ErrNoActiveEpoch if no E2EE epoch is active.
-	EpochAuthenticatorCode(ctx context.Context) (string, error)
-}
-
-var _ Reporter = (*session)(nil)
-
-func (s *session) State() State {
+// State returns a point-in-time snapshot of the session's E2EE state. Use it
+// to observe session health and export it with your own metrics stack; the
+// library takes no telemetry dependency.
+func (s *Session) State() State {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	st := State{
@@ -131,7 +109,9 @@ func (s *session) State() State {
 	return st
 }
 
-func (s *session) Stats() Stats {
+// Stats returns the session's cumulative counters. See the Stats type for
+// what each field measures.
+func (s *Session) Stats() Stats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -145,35 +125,49 @@ func (s *session) Stats() Stats {
 // Encrypt never errors regardless — it falls back to passthrough — so callers
 // that don't gate on Ready still work correctly.
 //
-// Equivalent signals: Reporter.State().Ready is the same boolean as a
-// point-in-time snapshot, and Reporter.WaitReady(ctx) blocks until the first
-// time it becomes true. The Reporter is reachable by type-asserting the
-// godave.Session returned by NewWithReporter's SessionCreateFunc; the noop
-// session returned by godave.NewNoopSession makes Ready always return true.
+// Equivalent signals: State().Ready is the same boolean as a point-in-time
+// snapshot, and WaitReady(ctx) blocks until the first time it becomes true.
+// The noop session returned by godave.NewNoopSession makes Ready always
+// return true.
 //
 // To tell "handshake in progress, expect E2EE soon" apart from "this channel
 // will never have E2EE", check State().ProtocolVersion. 0 means no E2EE will
 // be established on this channel (Ready stays false forever); >0 with !Ready
-// means a transient handshake window. Audio senders that don't want to hold
-// frames forever should gate on (State().Ready || State().ProtocolVersion == 0),
-// not just Ready().
-func (s *session) Ready() bool {
+// means a transient handshake window. Audio senders should prefer
+// ShouldHoldFrames, which encodes that distinction.
+func (s *Session) Ready() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return s.activeEpoch != nil && s.sendRatchet != nil
 }
 
-// WaitReady implements Reporter. It blocks without polling until the first
-// E2EE epoch activates or ctx is done. The start reference is degradedSince
-// if already set (i.e. PrepareEpoch was received before the call), otherwise
-// the moment WaitReady is called — so calling it right after NewWithReporter
-// gives an accurate first-handshake latency.
+// ShouldHoldFrames reports whether an audio sender should hold (not send)
+// frames right now: true only during a transient E2EE handshake window —
+// encryption is expected but not yet established. It returns false both when
+// the session is ready to encrypt and when the channel will never have E2EE
+// (transport-only, protocol version 0), so gating on it never stalls a
+// sender forever. Frames sent while it returns true would go out in
+// passthrough (unencrypted) and be dropped by receivers expecting E2EE.
+func (s *Session) ShouldHoldFrames() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ready := s.activeEpoch != nil && s.sendRatchet != nil
+
+	return !ready && s.protocolVersion != 0
+}
+
+// WaitReady blocks without polling until the first E2EE epoch activates or
+// ctx is done. The start reference is degradedSince if already set (i.e.
+// PrepareEpoch was received before the call), otherwise the moment WaitReady
+// is called — so calling it right after New gives an accurate
+// first-handshake latency.
 //
 // The loop is safe against epoch resets: resetEpochReadyLocked closes the old
 // channel and replaces it atomically under the write lock, so a spurious wake
 // always re-reads a fresh channel on the next iteration rather than spinning.
-func (s *session) WaitReady(ctx context.Context) (time.Duration, error) {
+func (s *Session) WaitReady(ctx context.Context) (time.Duration, error) {
 	start := time.Now()
 
 	s.mu.RLock()

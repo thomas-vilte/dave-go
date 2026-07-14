@@ -19,36 +19,39 @@ func (testCallbacks) SendMLSCommitWelcome([]byte) error     { return nil }
 func (testCallbacks) SendReadyForTransition(uint16) error   { return nil }
 func (testCallbacks) SendInvalidCommitWelcome(uint16) error { return nil }
 
-// TestNewWithReporter verifies the create func hands the integrator a working
-// Reporter AND a Closer via the closure, so they don't have to type-assert
-// the godave.Session to grab either.
-func TestNewWithReporter(t *testing.T) {
+// TestCreateFunc verifies the create func hands the integrator the concrete
+// *Session via WithSessionHook, so they don't have to type-assert the
+// godave.Session to observe or close it.
+func TestCreateFunc(t *testing.T) {
 	cb := testCallbacks{}
-	var gotReporter Reporter
+	var got *Session
 
-	createFunc := NewWithReporter(func(r Reporter, _ Closer, _ godave.Callbacks) {
-		gotReporter = r
-	})
+	createFunc := CreateFunc(WithSessionHook(func(s *Session) {
+		got = s
+	}))
 
 	s := createFunc(nil, "123456789", cb)
 	if s == nil {
-		t.Fatal("NewWithReporter create func returned nil")
+		t.Fatal("CreateFunc create func returned nil")
 	}
-	if gotReporter == nil {
-		t.Fatal("reporter callback was not invoked with a Reporter")
+	if got == nil {
+		t.Fatal("session hook was not invoked")
 	}
-	if gotReporter.State().Ready {
+	if got.State().Ready {
 		t.Fatal("a fresh session should not report E2EE-ready")
 	}
 
-	// A nil report func must not panic.
-	if NewWithReporter(nil)(nil, "123456789", cb) == nil {
-		t.Fatal("NewWithReporter(nil) create func returned nil")
+	// No options at all must not panic, and nil options must be skipped.
+	if CreateFunc()(nil, "123456789", cb) == nil {
+		t.Fatal("CreateFunc() create func returned nil")
+	}
+	if New("123456789", cb, nil, WithSessionHook(nil)) == nil {
+		t.Fatal("New with nil option returned nil")
 	}
 }
 
 func TestNewSession(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
+	s := New("test_user", testCallbacks{})
 	if s == nil {
 		t.Fatal("NewSession returned nil")
 	}
@@ -58,7 +61,7 @@ func TestNewSession(t *testing.T) {
 }
 
 func TestMaxEncryptedFrameSize(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
+	s := New("test_user", testCallbacks{})
 	got := s.MaxEncryptedFrameSize(100)
 	if got != 164 {
 		t.Fatalf("expected 164, got %d", got)
@@ -66,7 +69,7 @@ func TestMaxEncryptedFrameSize(t *testing.T) {
 }
 
 func TestMaxDecryptedFrameSize(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
+	s := New("test_user", testCallbacks{})
 	got := s.MaxDecryptedFrameSize("user1", 200)
 	if got != 200 {
 		t.Fatalf("expected 200, got %d", got)
@@ -74,10 +77,10 @@ func TestMaxDecryptedFrameSize(t *testing.T) {
 }
 
 func TestAssignSsrcToCodec(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
+	s := New("test_user", testCallbacks{})
 	s.AssignSsrcToCodec(12345, godave.CodecOpus)
 
-	sess := s.(*session)
+	sess := s
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 
@@ -87,11 +90,11 @@ func TestAssignSsrcToCodec(t *testing.T) {
 }
 
 func TestAddRemoveUser(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
+	s := New("test_user", testCallbacks{})
 	s.AddUser("user1")
 	s.AddUser("user2")
 
-	sess := s.(*session)
+	sess := s
 	sess.mu.RLock()
 	if len(sess.users) != 2 {
 		t.Fatalf("expected 2 users, got %d", len(sess.users))
@@ -107,10 +110,10 @@ func TestAddRemoveUser(t *testing.T) {
 }
 
 func TestSetChannelID(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
+	s := New("test_user", testCallbacks{})
 	s.SetChannelID(42)
 
-	sess := s.(*session)
+	sess := s
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 
@@ -120,10 +123,10 @@ func TestSetChannelID(t *testing.T) {
 }
 
 func TestOnSelectProtocolAck(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
+	s := New("test_user", testCallbacks{})
 	s.OnSelectProtocolAck(1)
 
-	sess := s.(*session)
+	sess := s
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 
@@ -133,10 +136,10 @@ func TestOnSelectProtocolAck(t *testing.T) {
 }
 
 func TestOnDavePrepareTransition(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
+	s := New("test_user", testCallbacks{})
 	s.OnDavePrepareTransition(5, 1)
 
-	sess := s.(*session)
+	sess := s
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 
@@ -146,10 +149,10 @@ func TestOnDavePrepareTransition(t *testing.T) {
 }
 
 func TestOnDaveExecuteTransitionNoPendingEpoch(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
+	s := New("test_user", testCallbacks{})
 	s.OnDaveExecuteTransition(5)
 
-	sess := s.(*session)
+	sess := s
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 
@@ -162,8 +165,8 @@ func TestOnDaveExecuteTransitionNoPendingEpoch(t *testing.T) {
 }
 
 func TestOnDavePrepareEpochReset(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
-	sess := s.(*session)
+	s := New("test_user", testCallbacks{})
+	sess := s
 
 	sess.activeEpoch = &epochState{id: 99}
 	sess.pendingEpoch = &epochState{id: 100}
@@ -185,8 +188,8 @@ func TestOnDavePrepareEpochReset(t *testing.T) {
 // frame is forwarded unmodified (passthrough) instead of failing, so the audio
 // stream keeps advancing when the bot is alone or mid-transition.
 func TestEncryptNoActiveEpochPassesThrough(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
-	sess := s.(*session)
+	s := New("test_user", testCallbacks{})
+	sess := s
 
 	plaintext := []byte{0x01, 0x02, 0x03, 0x04}
 	out := make([]byte, 256)
@@ -209,19 +212,19 @@ func TestEncryptNoActiveEpochPassesThrough(t *testing.T) {
 }
 
 func TestWaitReadyContextCanceled(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
+	s := New("test_user", testCallbacks{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := s.(Reporter).WaitReady(ctx)
+	_, err := s.WaitReady(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
 
 func TestWaitReadyAlreadyReady(t *testing.T) {
-	sess := New(nil, "test_user", testCallbacks{}).(*session)
+	sess := New("test_user", testCallbacks{})
 
 	sess.mu.Lock()
 	sess.activeEpoch = &epochState{id: 1, senders: make(map[godave.UserID]*senderState)}
@@ -242,7 +245,7 @@ func TestWaitReadyAlreadyReady(t *testing.T) {
 }
 
 func TestWaitReadySignaled(t *testing.T) {
-	sess := New(nil, "test_user", testCallbacks{}).(*session)
+	sess := New("test_user", testCallbacks{})
 
 	ready := make(chan time.Duration, 1)
 	go func() {
@@ -272,7 +275,7 @@ func TestWaitReadySignaled(t *testing.T) {
 }
 
 func TestWaitReadyEpochReset(t *testing.T) {
-	sess := New(nil, "test_user", testCallbacks{}).(*session)
+	sess := New("test_user", testCallbacks{})
 
 	ready := make(chan time.Duration, 1)
 	go func() {
@@ -315,7 +318,7 @@ func TestWaitReadyEpochReset(t *testing.T) {
 }
 
 func TestDecryptNoActiveEpoch(t *testing.T) {
-	s := New(nil, "test_user", testCallbacks{})
+	s := New("test_user", testCallbacks{})
 
 	// Use a frame that passes LooksLikeDAVEFrame so the epoch check is reached.
 	// 11 bytes minimum with 0xFA 0xFA magic marker at the end.
@@ -335,7 +338,7 @@ func TestDecryptNoActiveEpoch(t *testing.T) {
 // epoch (v0 / transition / fresh session), passthrough stays permissive.
 func TestDecrypt_PassthroughGuardWithActiveEpoch(t *testing.T) {
 	t.Run("rejects non-dave non-silence under E2EE", func(t *testing.T) {
-		sess := New(nil, "test_user", testCallbacks{}).(*session)
+		sess := New("test_user", testCallbacks{})
 
 		sess.mu.Lock()
 		sess.protocolVersion = 1
@@ -354,7 +357,7 @@ func TestDecrypt_PassthroughGuardWithActiveEpoch(t *testing.T) {
 	})
 
 	t.Run("rejects non-dave frame of different size under E2EE", func(t *testing.T) {
-		sess := New(nil, "test_user", testCallbacks{}).(*session)
+		sess := New("test_user", testCallbacks{})
 
 		sess.mu.Lock()
 		sess.protocolVersion = 1
@@ -372,7 +375,7 @@ func TestDecrypt_PassthroughGuardWithActiveEpoch(t *testing.T) {
 	})
 
 	t.Run("allows silence packet under E2EE", func(t *testing.T) {
-		sess := New(nil, "test_user", testCallbacks{}).(*session)
+		sess := New("test_user", testCallbacks{})
 
 		sess.mu.Lock()
 		sess.protocolVersion = 1
@@ -394,7 +397,7 @@ func TestDecrypt_PassthroughGuardWithActiveEpoch(t *testing.T) {
 	})
 
 	t.Run("allows arbitrary non-dave frame when no active epoch", func(t *testing.T) {
-		sess := New(nil, "test_user", testCallbacks{}).(*session)
+		sess := New("test_user", testCallbacks{})
 
 		// No active epoch: passthrough remains permissive (v0 / transition /
 		// fresh session), regardless of the frame content.
@@ -414,7 +417,7 @@ func TestDecrypt_PassthroughGuardWithActiveEpoch(t *testing.T) {
 }
 
 func TestDecrypt_ReplayRejected(t *testing.T) {
-	sess := New(nil, "test_user", testCallbacks{}).(*session)
+	sess := New("test_user", testCallbacks{})
 
 	// Build a sole-member session so we have real key material.
 	sess.mu.Lock()
@@ -483,7 +486,7 @@ func TestDecrypt_ReplayRejected(t *testing.T) {
 }
 
 func TestDecrypt_OutOfOrderAccepted(t *testing.T) {
-	sess := New(nil, "test_user", testCallbacks{}).(*session)
+	sess := New("test_user", testCallbacks{})
 
 	sess.mu.Lock()
 	sess.channelID = 987654321

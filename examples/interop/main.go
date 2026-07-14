@@ -33,7 +33,6 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/disgo/voice"
-	"github.com/disgoorg/godave"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/thomas-vilte/dave-go/session"
 )
@@ -67,26 +66,26 @@ func logLevel() slog.Level {
 	}
 }
 
-// reporterHolder stashes the session Reporter handed over at session creation
-// so the status goroutine can read the live E2EE state. There is one DAVE
-// session per voice connection; a move/reconnect replaces it, so guard with a
-// mutex and always read the latest.
-type reporterHolder struct {
+// sessionHolder stashes the *session.Session handed over at creation so the
+// status goroutine can read the live E2EE state. There is one DAVE session
+// per voice connection; a move/reconnect replaces it, so guard with a mutex
+// and always read the latest.
+type sessionHolder struct {
 	mu sync.Mutex
-	r  session.Reporter
+	s  *session.Session
 }
 
-func (h *reporterHolder) set(r session.Reporter) {
+func (h *sessionHolder) set(s *session.Session) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.r = r
+	h.s = s
 }
 
-func (h *reporterHolder) get() session.Reporter {
+func (h *sessionHolder) get() *session.Session {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	return h.r
+	return h.s
 }
 
 func main() {
@@ -100,7 +99,7 @@ func main() {
 
 	slog.Info("starting interop harness", slog.String("disgo_version", disgo.Version))
 
-	holder := &reporterHolder{}
+	holder := &sessionHolder{}
 
 	client, err := disgo.New(token,
 		bot.WithLogger(logger),
@@ -109,11 +108,11 @@ func main() {
 			go play(e.Client())
 		}),
 		bot.WithVoiceManagerConfigOpts(
-			voice.WithDaveSessionCreateFunc(session.NewWithReporter(
-				func(r session.Reporter, _ session.Closer, _ godave.Callbacks) {
-					holder.set(r)
-					slog.Info("dave session created — E2EE reporter captured")
-				},
+			voice.WithDaveSessionCreateFunc(session.CreateFunc(
+				session.WithSessionHook(func(s *session.Session) {
+					holder.set(s)
+					slog.Info("dave session created — E2EE session captured")
+				}),
 			)),
 		),
 	)
@@ -146,7 +145,7 @@ func main() {
 // reportStatus logs the session's E2EE state every few seconds: the readiness
 // snapshot, key counters, and the epoch authenticator code to compare against
 // the Discord client's displayed security code.
-func reportStatus(holder *reporterHolder) {
+func reportStatus(holder *sessionHolder) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 

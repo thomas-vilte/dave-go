@@ -17,9 +17,18 @@ import (
 	"github.com/thomas-vilte/dave-go/mediakeys"
 )
 
-var _ godave.Session = (*session)(nil)
+var _ godave.Session = (*Session)(nil)
 
-type session struct {
+// Session is a DAVE E2EE session for a single voice connection. It implements
+// godave.Session (the encrypt/decrypt/protocol-event contract consumed by the
+// voice layer) and additionally exposes observability (State, Stats, WaitReady,
+// EpochAuthenticatorCode) and lifecycle (Close, WaitShutdown) methods directly
+// on the concrete type — no type assertions needed.
+//
+// Create one with New, or hand CreateFunc to the voice layer and capture the
+// *Session via WithSessionHook. A Session is single-use per voice connection;
+// call Close when discarding it (channel move, disconnect).
+type Session struct {
 	// logger carries the session's correlation fields (dave_session, user_id and,
 	// once known, channel_id) so every line can be traced back to one connection.
 	// baseLogger keeps the original caller logger to re-bind those fields when the
@@ -134,63 +143,113 @@ type senderState struct {
 	replay   antiReplayWindow
 }
 
-func New(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) godave.Session {
-	return newSession(logger, userID, callbacks)
+// config collects construction-time settings; it only exists so Options have
+// something to mutate before the Session is built.
+type config struct {
+	logger           *slog.Logger
+	recoveryTimeout  time.Duration
+	sendRetentionTTL time.Duration
+	hook             func(*Session)
 }
 
-func newSession(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) *session {
-	if logger == nil {
-		logger = slog.Default()
+// Option configures a Session at construction time. Pass Options to New, or
+// to CreateFunc to have them applied to every session the voice layer creates.
+type Option func(*config)
+
+// WithLogger sets the logger the session binds its correlation fields
+// (dave_session, user_id, channel_id) onto. Defaults to slog.Default().
+// A nil logger is ignored.
+func WithLogger(logger *slog.Logger) Option {
+	return func(c *config) {
+		if logger != nil {
+			c.logger = logger
+		}
+	}
+}
+
+// WithRecoveryTimeout sets how long the recovery and commit-confirm watchdogs
+// wait for an epoch to activate before declaring the MLS state broken and
+// re-requesting a key package (protocol.md "Recovery from Invalid Commit or
+// Welcome"). Defaults to 15s. Values <= 0 are ignored.
+func WithRecoveryTimeout(d time.Duration) Option {
+	return func(c *config) {
+		if d > 0 {
+			c.recoveryTimeout = d
+		}
+	}
+}
+
+// WithSessionHook registers a function called with the fully constructed
+// *Session before it is handed to the voice layer. This is the way to get a
+// handle on sessions the voice layer creates internally (via CreateFunc):
+// stash the *Session to read State()/Stats(), gate audio on ShouldHoldFrames,
+// and call Close() when your disconnect handling discards the connection.
+func WithSessionHook(hook func(*Session)) Option {
+	return func(c *config) {
+		c.hook = hook
+	}
+}
+
+// New creates a DAVE session for one voice connection. The returned *Session
+// implements godave.Session, so it can be handed to the voice layer directly;
+// keep the concrete reference for observability and lifecycle (see the
+// Session type docs). Most disgo integrators want CreateFunc instead, which
+// adapts New to the voice manager's factory signature.
+func New(userID godave.UserID, callbacks godave.Callbacks, opts ...Option) *Session {
+	cfg := config{
+		logger:           slog.Default(),
+		recoveryTimeout:  epochRecoveryTimeout,
+		sendRetentionTTL: epochRetention,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
 	}
 
 	id := newSessionID()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &session{
-		logger:           logger.With("dave_session", id, "user_id", string(userID)),
-		baseLogger:       logger,
+	sess := &Session{
+		logger:           cfg.logger.With("dave_session", id, "user_id", string(userID)),
+		baseLogger:       cfg.logger,
 		id:               id,
 		userID:           userID,
 		callbacks:        callbacks,
 		ssrcCodecs:       make(map[uint32]codecs.Kind),
 		users:            make(map[godave.UserID]struct{}),
 		sendCounter:      mediakeys.NewNonceCounter(),
-		sendRetentionTTL: epochRetention,
+		sendRetentionTTL: cfg.sendRetentionTTL,
 		epochReady:       make(chan struct{}),
-		recoveryTimeout:  epochRecoveryTimeout,
+		recoveryTimeout:  cfg.recoveryTimeout,
 		shutdownCtx:      ctx,
 		shutdownCancel:   cancel,
 		shutdownDone:     make(chan struct{}),
 	}
+
+	if cfg.hook != nil {
+		cfg.hook(sess)
+	}
+
+	return sess
 }
 
-// ReporterFunc receives a session's Reporter, Closer, and the godave.Callbacks
-// it was created with, right after the session is created. It lets integrators
-// observe E2EE readiness/health (State/Stats) and capture the Closer for
-// lifecycle teardown without type-asserting the godave.Session later.
+// CreateFunc adapts New to godave.SessionCreateFunc so the voice layer can
+// create one session per voice connection. The logger the voice layer passes
+// in is used unless overridden with WithLogger.
 //
 // Example:
 //
-//	voice.WithDaveSessionCreateFunc(session.NewWithReporter(
-//	    func(r session.Reporter, c session.Closer, cb godave.Callbacks) {
-//	        // stash r + c keyed by guild/conn so your OpusFrameProvider
-//	        // can read r.State().Ready before feeding frames, and the
-//	        // disconnect handler can call c.Close() on discard.
-//	    },
+//	voice.WithDaveSessionCreateFunc(session.CreateFunc(
+//	    session.WithSessionHook(func(s *session.Session) {
+//	        // stash s keyed by guild/conn: read s.State() for health,
+//	        // gate audio on s.ShouldHoldFrames(), and s.Close() on discard.
+//	    }),
 //	))
-type ReporterFunc func(Reporter, Closer, godave.Callbacks)
-
-// NewWithReporter returns a godave.SessionCreateFunc that creates a session
-// and hands its Reporter and Closer to report. See ReporterFunc for usage.
-func NewWithReporter(report ReporterFunc) godave.SessionCreateFunc {
+func CreateFunc(opts ...Option) godave.SessionCreateFunc {
 	return func(logger *slog.Logger, userID godave.UserID, callbacks godave.Callbacks) godave.Session {
-		s := newSession(logger, userID, callbacks)
-		if report != nil {
-			report(s, s, callbacks)
-		}
-
-		return s
+		return New(userID, callbacks, append([]Option{WithLogger(logger)}, opts...)...)
 	}
 }
 
@@ -207,11 +266,11 @@ func newSessionID() string {
 	return hex.EncodeToString(b[:])
 }
 
-func (s *session) MaxSupportedProtocolVersion() int {
+func (s *Session) MaxSupportedProtocolVersion() int {
 	return 1
 }
 
-func (s *session) SetChannelID(channelID godave.ChannelID) {
+func (s *Session) SetChannelID(channelID godave.ChannelID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.channelID = channelID
@@ -224,17 +283,17 @@ func (s *session) SetChannelID(channelID godave.ChannelID) {
 	)
 }
 
-func (s *session) AssignSsrcToCodec(ssrc uint32, codec godave.Codec) {
+func (s *Session) AssignSsrcToCodec(ssrc uint32, codec godave.Codec) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ssrcCodecs[ssrc] = toCodecKind(codec)
 }
 
-func (s *session) MaxEncryptedFrameSize(frameSize int) int {
+func (s *Session) MaxEncryptedFrameSize(frameSize int) int {
 	return frameSize + 64
 }
 
-func (s *session) resetEpochReadyLocked() {
+func (s *Session) resetEpochReadyLocked() {
 	// Close the old channel so any goroutine blocked on it wakes up immediately.
 	select {
 	case <-s.epochReady:
@@ -253,7 +312,7 @@ func (s *session) resetEpochReadyLocked() {
 // not a spec requirement. When the retained ratchet expires, this resets
 // sendCounter (so the new ratchet starts from nonce 0 per spec) and returns
 // the new ratchet. Must be called with s.mu held.
-func (s *session) selectSendRatchetLocked() *mediakeys.KeyRatchet {
+func (s *Session) selectSendRatchetLocked() *mediakeys.KeyRatchet {
 	if s.retainedSendRatchet != nil {
 		if time.Now().Before(s.retainedSendExpiresAt) {
 			return s.retainedSendRatchet
@@ -266,7 +325,7 @@ func (s *session) selectSendRatchetLocked() *mediakeys.KeyRatchet {
 	return s.sendRatchet
 }
 
-func (s *session) signalEpochReadyLocked() {
+func (s *Session) signalEpochReadyLocked() {
 	select {
 	case <-s.epochReady:
 		return
@@ -275,7 +334,7 @@ func (s *session) signalEpochReadyLocked() {
 	}
 }
 
-func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) (int, error) {
+func (s *Session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -366,11 +425,11 @@ func (s *session) Encrypt(ssrc uint32, frameData []byte, encryptedFrame []byte) 
 	return n, nil
 }
 
-func (s *session) MaxDecryptedFrameSize(_ godave.UserID, frameSize int) int {
+func (s *Session) MaxDecryptedFrameSize(_ godave.UserID, frameSize int) int {
 	return frameSize
 }
 
-func (s *session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame []byte) (int, error) {
+func (s *Session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame []byte) (int, error) {
 	// Full lock (not RLock): Decrypt mutates per-sender state — the nonce
 	// expander (Commit) and the anti-replay window (checkAndMark) — which are
 	// not safe under concurrent readers. Encrypt already holds a full lock, so
@@ -468,19 +527,19 @@ func (s *session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 	return 0, ErrDecryptionFailed
 }
 
-func (s *session) AddUser(userID godave.UserID) {
+func (s *Session) AddUser(userID godave.UserID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.users[userID] = struct{}{}
 }
 
-func (s *session) RemoveUser(userID godave.UserID) {
+func (s *Session) RemoveUser(userID godave.UserID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.users, userID)
 }
 
-func (s *session) OnSelectProtocolAck(protocolVersion uint16) {
+func (s *Session) OnSelectProtocolAck(protocolVersion uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.protocolVersion = protocolVersion
@@ -518,7 +577,7 @@ func (s *session) OnSelectProtocolAck(protocolVersion uint16) {
 	}
 }
 
-func (s *session) OnDavePrepareTransition(transitionID uint16, protocolVersion uint16) {
+func (s *Session) OnDavePrepareTransition(transitionID uint16, protocolVersion uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pendingTransitionID = transitionID
@@ -552,7 +611,7 @@ func (s *session) OnDavePrepareTransition(transitionID uint16, protocolVersion u
 	}
 }
 
-func (s *session) OnDaveExecuteTransition(transitionID uint16) {
+func (s *Session) OnDaveExecuteTransition(transitionID uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -589,7 +648,7 @@ func (s *session) OnDaveExecuteTransition(transitionID uint16) {
 	s.pendingTransitionID = 0
 }
 
-func (s *session) OnDavePrepareEpoch(epoch int, protocolVersion uint16) {
+func (s *Session) OnDavePrepareEpoch(epoch int, protocolVersion uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -625,7 +684,7 @@ func (s *session) OnDavePrepareEpoch(epoch int, protocolVersion uint16) {
 	}
 }
 
-func (s *session) OnDaveMLSExternalSenderPackage(externalSenderPackage []byte) {
+func (s *Session) OnDaveMLSExternalSenderPackage(externalSenderPackage []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.externalSenderPackage = append([]byte(nil), externalSenderPackage...)
@@ -634,7 +693,7 @@ func (s *session) OnDaveMLSExternalSenderPackage(externalSenderPackage []byte) {
 	}
 }
 
-func (s *session) OnDaveMLSProposals(proposals []byte) {
+func (s *Session) OnDaveMLSProposals(proposals []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastProposalBatch = append([]byte(nil), proposals...)
@@ -659,7 +718,7 @@ func (s *session) OnDaveMLSProposals(proposals []byte) {
 
 // processAndCommitProposalBatchLocked processes a proposal batch and commits.
 // Must be called with s.mu held.
-func (s *session) processAndCommitProposalBatchLocked(proposals []byte) {
+func (s *Session) processAndCommitProposalBatchLocked(proposals []byte) {
 	if err := s.ensureMLSClientLocked(); err != nil {
 		s.logger.Error("failed to init mls client", "error", err)
 
@@ -713,7 +772,7 @@ func (s *session) processAndCommitProposalBatchLocked(proposals []byte) {
 // snapshot and then processes the winning commit. It returns false if the
 // transition must be aborted because the state restore or the commit processing
 // failed. Must be called with s.mu held.
-func (s *session) reconcileCompetingCommitLocked(transitionID uint16, commitMessage []byte) bool {
+func (s *Session) reconcileCompetingCommitLocked(transitionID uint16, commitMessage []byte) bool {
 	if s.pendingEpoch != nil {
 		// Our commit lost; restore pre-commit state before processing the winner.
 		s.logger.Debug("OnDaveMLSPrepareCommitTransition: competing commit won, rolling back",
@@ -745,7 +804,7 @@ func (s *session) reconcileCompetingCommitLocked(transitionID uint16, commitMess
 	return true
 }
 
-func (s *session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMessage []byte) {
+func (s *Session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMessage []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -792,7 +851,7 @@ func (s *session) OnDaveMLSPrepareCommitTransition(transitionID uint16, commitMe
 	}
 }
 
-func (s *session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
+func (s *Session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

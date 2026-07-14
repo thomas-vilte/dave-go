@@ -65,7 +65,7 @@ func buildExternalSenderPackageWithKey(t *testing.T) ([]byte, *ecdsa.PrivateKey)
 // ratchet, and end up able to encrypt its own audio while alone.
 func TestSoleMemberReset_EncryptsWhileAlone(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 	s.SetChannelID(987654321)
 
 	const ssrc = 42
@@ -114,7 +114,7 @@ func TestSoleMemberReset_EncryptsWhileAlone(t *testing.T) {
 // leaves the session in passthrough instead of erroring.
 func TestSoleMemberReset_NoExternalSenderStaysPassthrough(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 
 	s.OnDavePrepareTransition(0, 0)
 

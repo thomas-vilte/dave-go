@@ -14,11 +14,11 @@ import (
 	memorystore "github.com/thomas-vilte/mls-go/storage/memory"
 )
 
-func setupActiveSoleMemberSessionWithKey(t *testing.T) (*session, *ecdsa.PrivateKey) {
+func setupActiveSoleMemberSessionWithKey(t *testing.T) (*Session, *ecdsa.PrivateKey) {
 	t.Helper()
 
 	pkg, extPriv := buildExternalSenderPackageWithKey(t)
-	s := New(nil, "123456789", testCallbacks{}).(*session)
+	s := New("123456789", testCallbacks{})
 	s.SetChannelID(987654321)
 	s.OnSelectProtocolAck(1)
 	s.OnDaveMLSExternalSenderPackage(pkg)
@@ -31,7 +31,7 @@ func setupActiveSoleMemberSessionWithKey(t *testing.T) (*session, *ecdsa.Private
 	return s, extPriv
 }
 
-func addProposalBytesForUser(t *testing.T, s *session, extPriv *ecdsa.PrivateKey, userID string) []byte {
+func addProposalBytesForUser(t *testing.T, s *Session, extPriv *ecdsa.PrivateKey, userID string) []byte {
 	t.Helper()
 
 	identity, err := userIDToIdentityBytes(godave.UserID(userID))
@@ -47,7 +47,7 @@ func addProposalBytesForUser(t *testing.T, s *session, extPriv *ecdsa.PrivateKey
 // encoding — used to build a credential that parses fine at the MLS level
 // but that identityBytesToUserID (which requires exactly 8 bytes) can't
 // turn into a UserID.
-func addProposalBytesForIdentity(t *testing.T, s *session, extPriv *ecdsa.PrivateKey, identity []byte) []byte {
+func addProposalBytesForIdentity(t *testing.T, s *Session, extPriv *ecdsa.PrivateKey, identity []byte) []byte {
 	t.Helper()
 
 	return addProposalBytesAsExternalSender(t, s, extPriv, identity)
@@ -60,7 +60,7 @@ func addProposalBytesForIdentity(t *testing.T, s *session, extPriv *ecdsa.Privat
 // The bot's own ProposeAddMember signs as SenderTypeMember, which the
 // sender/type validation now rejects; tests must generate proposals the way
 // the gateway actually would.
-func addProposalBytesAsExternalSender(t *testing.T, s *session, extPriv *ecdsa.PrivateKey, identity []byte) []byte {
+func addProposalBytesAsExternalSender(t *testing.T, s *Session, extPriv *ecdsa.PrivateKey, identity []byte) []byte {
 	t.Helper()
 
 	ctx := context.Background()
@@ -118,7 +118,7 @@ func addProposalBytesAsExternalSender(t *testing.T, s *session, extPriv *ecdsa.P
 	return framing.NewMLSMessagePublic(pm).Marshal()
 }
 
-func memberCount(t *testing.T, s *session) int {
+func memberCount(t *testing.T, s *Session) int {
 	t.Helper()
 
 	members, err := s.mlsClient.client.ListMembers(context.Background(), s.groupID)

@@ -28,11 +28,15 @@
 //
 // Lifecycle:
 //
-//	The session is single-use per voice connection. The integrator MUST
-//	call Closer.Close() when the session is discarded (channel move, voice
+//	The session is single-use per voice connection. The integrator should
+//	call Session.Close() when the session is discarded (channel move, voice
 //	disconnect) so the internal recovery/commit watchdogs exit promptly.
-//	Without it, an old session can keep re-arming invalidations on a
-//	channel the bot no longer occupies.
+//	The watchdogs are time-bounded (at most maxRecoveryAttempts retries of
+//	recoveryTimeout each, ~45s worst case), so a missed Close is not a
+//	permanent leak — but until they expire the old session can keep re-arming
+//	invalidations on a channel the bot no longer occupies. Close satisfies
+//	io.Closer, so a voice layer holding only the godave.Session can tear
+//	it down via a plain io.Closer type assertion.
 //
 // Send path:
 //
@@ -50,25 +54,27 @@
 // frames end-to-end. Which one to use depends on whether the caller blocks
 // or polls:
 //
-//   - godave.Session.Ready() returns the boolean snapshot. This is the form
+//   - Session.Ready() returns the boolean snapshot. This is the form
 //     the audio layer is expected to call on every frame.
-//   - Reporter.State().Ready is the same boolean exposed via the Reporter
-//     interface; the Reporter is obtained as the first argument of the
-//     closure passed to session.NewWithReporter. State() additionally
+//   - Session.State().Ready is the same boolean; State() additionally
 //     exposes the active EpochID and the start of any degraded window
 //     (DegradedSince), which audio senders can use to decide whether to
 //     stop feeding frames.
-//   - Reporter.WaitReady(ctx) blocks until the first E2EE epoch activates
+//   - Session.WaitReady(ctx) blocks until the first E2EE epoch activates
 //     and returns the time the call took. Use it right after creating the
 //     session to measure first-handshake latency or to gate startup that
 //     must wait for encryption.
 //
 // Plain passthrough (e.g. on a protocol-version-0 channel) returns !Ready
-// forever; the integrator should distinguish that stable state from a
-// transient handshake window by reading State().ProtocolVersion: 0 means
-// "no E2EE on this channel", >0 plus !Ready means "handshake pending". An
-// audio sender that doesn't want to block indefinitely can gate on
-// (State().Ready || State().ProtocolVersion == 0).
+// forever; Session.ShouldHoldFrames() tells that stable state apart from a
+// transient handshake window (it reads State().ProtocolVersion under the
+// hood: 0 means "no E2EE on this channel", >0 plus !Ready means "handshake
+// pending") — audio senders should gate on it instead of combining the two
+// fields by hand.
+//
+// To get a *Session handle when the voice layer creates sessions internally,
+// pass CreateFunc(WithSessionHook(...)) as the voice manager's session
+// factory; the hook receives each *Session as it is created.
 // References:
 //   - protocol.md "Sender Key Derivation"
 //   - protocol.md "Key Rotation"

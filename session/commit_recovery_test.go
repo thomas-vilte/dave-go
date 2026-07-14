@@ -17,7 +17,7 @@ func TestCommitRecovery_ArmsAfterSoleMemberActivation(t *testing.T) {
 	cb := &countingCallbacks{}
 	pkg, extPriv := buildExternalSenderPackageWithKey(t)
 
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 	s.recoveryTimeout = 20 * time.Millisecond
 	s.SetChannelID(987654321)
 	s.OnSelectProtocolAck(1)

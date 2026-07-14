@@ -3,30 +3,36 @@ package session
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
 	"github.com/disgoorg/godave"
 )
 
-// TestCloser_Interface makes sure *session implements Closer and that the
-// godave.Session returned by New is also a Closer (so integrators can
-// type-assert at the call site).
-func TestCloser_Interface(t *testing.T) {
-	var _ Closer = (*session)(nil)
-	s := New(nil, "user", testCallbacks{})
-	if _, ok := s.(Closer); !ok {
-		t.Fatal("godave.Session from New does not implement Closer")
+// TestClose_IOCloser makes sure a *Session seen through the godave.Session
+// interface can be torn down with a plain io.Closer assertion — the pattern
+// a voice layer holding only the interface is expected to use — and that
+// Close never fails.
+func TestClose_IOCloser(t *testing.T) {
+	var _ io.Closer = (*Session)(nil)
+	var sess godave.Session = New("user", testCallbacks{})
+	c, ok := sess.(io.Closer)
+	if !ok {
+		t.Fatal("godave.Session from New does not implement io.Closer")
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close must never fail, got: %v", err)
 	}
 }
 
 // TestClose_Idempotent verifies Close can be called multiple times
 // without panicking, blocking, or double-closing the done channel.
 func TestClose_Idempotent(t *testing.T) {
-	s := New(nil, "123456789", testCallbacks{}).(*session)
-	s.Close()
-	s.Close()
-	s.Close()
+	s := New("123456789", testCallbacks{})
+	_ = s.Close()
+	_ = s.Close()
+	_ = s.Close()
 }
 
 // TestClose_StopsRecoveryWatchdog verifies that Close prevents a
@@ -48,7 +54,7 @@ func TestClose_StopsRecoveryWatchdog(t *testing.T) {
 	}, "recovery watchdog did not fire before Close")
 
 	invalidBefore, _ := cb.counts()
-	s.Close()
+	_ = s.Close()
 
 	// Sleep well past the recovery timeout. If Close did not stop the
 	// watchdog, it would re-fire several times.
@@ -69,7 +75,7 @@ func TestClose_StopsCommitWatchdog(t *testing.T) {
 	cb := &countingCallbacks{}
 	s := newRecoveryTestSession(t, cb)
 
-	s.Close()
+	_ = s.Close()
 
 	// After Close, any future invalidation must NOT spawn a watchdog
 	// that reaches the callback. The lock-protected path will still
@@ -90,9 +96,9 @@ func TestClose_StopsCommitWatchdog(t *testing.T) {
 // integrator to stop calling them; we just verify the library
 // doesn't blow up if they do.
 func TestClose_PostCloseCallbackDoesNotPanic(t *testing.T) {
-	s := New(nil, "123456789", testCallbacks{}).(*session)
+	s := New("123456789", testCallbacks{})
 	s.OnSelectProtocolAck(1)
-	s.Close()
+	_ = s.Close()
 
 	s.OnDavePrepareEpoch(1, 1)
 	s.OnDavePrepareTransition(5, 1)
@@ -112,8 +118,8 @@ func TestClose_PostCloseCallbackDoesNotPanic(t *testing.T) {
 // TestWaitShutdown_ResolvesAfterClose verifies WaitShutdown returns
 // nil promptly once Close was called.
 func TestWaitShutdown_ResolvesAfterClose(t *testing.T) {
-	s := New(nil, "123456789", testCallbacks{}).(*session)
-	s.Close()
+	s := New("123456789", testCallbacks{})
+	_ = s.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -126,7 +132,7 @@ func TestWaitShutdown_ResolvesAfterClose(t *testing.T) {
 // TestWaitShutdown_RespectsContext verifies WaitShutdown honors ctx
 // when Close was not called.
 func TestWaitShutdown_RespectsContext(t *testing.T) {
-	s := New(nil, "123456789", testCallbacks{}).(*session)
+	s := New("123456789", testCallbacks{})
 	// Do NOT call Close.
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -138,36 +144,32 @@ func TestWaitShutdown_RespectsContext(t *testing.T) {
 	}
 }
 
-// TestNewWithReporter_DeliversCloser verifies the new 3-arg
-// callback receives both Reporter and Closer.
-func TestNewWithReporter_DeliversCloser(t *testing.T) {
+// TestCreateFunc_HookSessionIsTheOneReturned verifies WithSessionHook hands
+// the integrator the exact *Session the voice layer receives, and that its
+// lifecycle methods work on that handle.
+func TestCreateFunc_HookSessionIsTheOneReturned(t *testing.T) {
 	cb := testCallbacks{}
-	var gotReporter Reporter
-	var gotCloser Closer
+	var got *Session
 
-	createFunc := NewWithReporter(func(r Reporter, c Closer, _ godave.Callbacks) {
-		gotReporter = r
-		gotCloser = c
-	})
+	createFunc := CreateFunc(WithSessionHook(func(s *Session) {
+		got = s
+	}))
 
 	s := createFunc(nil, "123456789", cb)
 	if s == nil {
-		t.Fatal("NewWithReporter create func returned nil")
+		t.Fatal("CreateFunc create func returned nil")
 	}
-	if gotReporter == nil {
-		t.Fatal("Reporter not delivered")
+	if got == nil {
+		t.Fatal("session hook was not invoked")
 	}
-	if gotCloser == nil {
-		t.Fatal("Closer not delivered")
+	if s.(*Session) != got {
+		t.Fatal("session returned does not match the one delivered to the hook")
 	}
-	if gotReporter.State().Ready {
-		t.Fatal("a fresh session should not report E2EE-ready")
-	}
-	// Ensure Reporter and Closer point to the same session.
-	if r, ok := s.(Reporter); !ok || r != gotReporter {
-		t.Fatal("session returned does not match the Reporter delivered")
-	}
-	if c, ok := s.(Closer); !ok || c != gotCloser {
-		t.Fatal("session returned does not match the Closer delivered")
+
+	_ = got.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := got.WaitShutdown(ctx); err != nil {
+		t.Fatalf("WaitShutdown after Close on hook-delivered session: %v", err)
 	}
 }

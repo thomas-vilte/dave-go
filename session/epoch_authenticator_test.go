@@ -15,7 +15,7 @@ import (
 // mlsClient and groupID unset).
 func TestEpochAuthenticator_RequiresActiveEpoch(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 
 	if _, err := s.EpochAuthenticator(context.Background()); !errors.Is(err, ErrNoActiveEpoch) {
 		t.Fatalf("pre-epoch raw err = %v, want ErrNoActiveEpoch", err)
@@ -32,7 +32,7 @@ func TestEpochAuthenticator_RequiresActiveEpoch(t *testing.T) {
 // Reuses the fixture from TestSoleMemberReset_EncryptsWhileAlone.
 func TestEpochAuthenticator_AfterSoleMemberEpoch(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
-	s := New(nil, "123456789", cb).(*session)
+	s := New("123456789", cb)
 	s.SetChannelID(987654321)
 
 	const ssrc = 42

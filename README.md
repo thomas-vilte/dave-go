@@ -77,7 +77,7 @@ import (
 
 client, _ := disgo.New(token,
 	bot.WithVoiceManagerConfigOpts(
-		voice.WithDaveSessionCreateFunc(session.New),
+		voice.WithDaveSessionCreateFunc(session.CreateFunc()),
 	),
 )
 ```
@@ -88,19 +88,20 @@ use to check interop against a real Discord client in [`examples/interop`](./exa
 
 ## Observability
 
-If you want to watch the E2EE state, use `session.NewWithReporter` instead. It hands you a
-`Reporter` (and a `Closer` so you can tear the session down cleanly when the bot moves
-channels or disconnects):
+If you want to watch the E2EE state, add a session hook. It hands you the concrete
+`*session.Session`, which has everything on it — observability and lifecycle — with no
+type assertions:
 
 ```go
-voice.WithDaveSessionCreateFunc(session.NewWithReporter(
-	func(r session.Reporter, c session.Closer, _ godave.Callbacks) {
-		// r.State()  -> Ready, EpochID, ProtocolVersion, DegradedSince
-		// r.Stats()  -> commits, welcomes, replay rejections, downgrades, ...
-		// r.EpochAuthenticatorCode(ctx) -> 30-digit out-of-band verification code
-		// call c.Close() when you drop the session
-		myMetrics.track(r)
-	},
+voice.WithDaveSessionCreateFunc(session.CreateFunc(
+	session.WithSessionHook(func(s *session.Session) {
+		// s.State()  -> Ready, EpochID, ProtocolVersion, DegradedSince
+		// s.Stats()  -> commits, welcomes, replay rejections, downgrades, ...
+		// s.EpochAuthenticatorCode(ctx) -> 30-digit out-of-band verification code
+		// s.ShouldHoldFrames() -> gate your audio sender during the E2EE handshake
+		// call s.Close() when you drop the session (channel move, disconnect)
+		myMetrics.track(s)
+	}),
 ))
 ```
 
