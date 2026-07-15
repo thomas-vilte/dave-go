@@ -156,6 +156,9 @@ func TestOnDaveMLSProposals_AddValidation(t *testing.T) {
 		if got := memberCount(t, s); got != 1 {
 			t.Fatalf("member count after unexpected add = %d, want 1", got)
 		}
+		if got := s.Stats().ProposalsRejected; got != 1 {
+			t.Fatalf("ProposalsRejected after unexpected add = %d, want 1", got)
+		}
 	})
 
 	t.Run("accepts expected add", func(t *testing.T) {
@@ -172,6 +175,9 @@ func TestOnDaveMLSProposals_AddValidation(t *testing.T) {
 
 		if got := memberCount(t, s); got != 2 {
 			t.Fatalf("member count after expected add = %d, want 2", got)
+		}
+		if got := s.Stats().ProposalsRejected; got != 0 {
+			t.Fatalf("ProposalsRejected after accepted add = %d, want 0", got)
 		}
 	})
 
@@ -191,6 +197,9 @@ func TestOnDaveMLSProposals_AddValidation(t *testing.T) {
 
 		if got := memberCount(t, s); got != 1 {
 			t.Fatalf("member count after unparseable-identity add = %d, want 1 (must be rejected)", got)
+		}
+		if got := s.Stats().ProposalsRejected; got != 1 {
+			t.Fatalf("ProposalsRejected after fail-closed inspection = %d, want 1", got)
 		}
 	})
 }
@@ -213,6 +222,9 @@ func TestOnDaveMLSProposals_RejectsNewMemberProposalSender(t *testing.T) {
 	if got := memberCount(t, s); got != 1 {
 		t.Fatalf("member count after disallowed sender = %d, want 1", got)
 	}
+	if got := s.Stats().ProposalsRejected; got != 1 {
+		t.Fatalf("ProposalsRejected after disallowed sender = %d, want 1", got)
+	}
 }
 
 func TestOnDaveMLSProposals_RejectsDisallowedProposalType(t *testing.T) {
@@ -234,5 +246,8 @@ func TestOnDaveMLSProposals_RejectsDisallowedProposalType(t *testing.T) {
 
 	if got := memberCount(t, s); got != 1 {
 		t.Fatalf("member count after disallowed proposal type = %d, want 1", got)
+	}
+	if got := s.Stats().ProposalsRejected; got != 1 {
+		t.Fatalf("ProposalsRejected after disallowed proposal type = %d, want 1", got)
 	}
 }

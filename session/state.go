@@ -44,6 +44,15 @@ type Stats struct {
 	// ready"). Distinct from RecoveryAttempts, which only counts MLS faults.
 	RecoveryAttemptsTransport uint64
 	EncryptFailures           uint64
+	// DecryptFailures counts Decrypt calls that returned an error: plaintext
+	// injected under active E2EE, malformed DAVE frames, and frames that no
+	// known epoch/sender key could authenticate. Sporadic bursts right after
+	// a join/move are protocol-normal (frames encrypted for an epoch this
+	// session was never a member of — it cannot have those keys); sustained
+	// growth outside transition windows means a diverged peer or an
+	// injection attempt. Frames rejected as replays are included here too
+	// (they also increment RejectedReplayFrames, which is the breakdown).
+	DecryptFailures uint64
 	// PassthroughFrames counts frames forwarded unmodified because no E2EE epoch
 	// was active (sole member before activation, or a protocol-version-0 session).
 	PassthroughFrames uint64
@@ -84,6 +93,15 @@ type Stats struct {
 	// survived long enough to reach the decryptor after a prior successful
 	// decryption.
 	RejectedReplayFrames uint64
+	// ProposalsRejected counts MLS proposals refused by the DAVE validation
+	// layer before reaching the MLS client: disallowed sender or proposal
+	// type (only Add/Remove from the voice gateway's external sender are
+	// allowed, protocol.md "Proposal Handling"), add proposals for users not
+	// expected in the session, and proposals that failed safe inspection
+	// (fail-closed). Zero in normal operation; growth means the gateway is
+	// sending malformed batches or something is probing the session with
+	// crafted proposals — i.e. the validation layer actively doing its job.
+	ProposalsRejected uint64
 	// DowngradeToV0 counts the number of times the session was downgraded
 	// from DAVE E2EE (protocol version ≥ 1) to transport-only encryption
 	// (protocol version 0). Non-zero indicates the call received at least

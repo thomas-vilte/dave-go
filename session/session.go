@@ -445,6 +445,8 @@ func (s *Session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 		// still retained to decrypt in-flight DAVE frames from before the
 		// downgrade — so v0 plaintext frames must pass through.
 		if s.activeEpoch != nil && s.protocolVersion != 0 && !isSilencePacket(frameData) {
+			s.stats.DecryptFailures++
+
 			return 0, ErrDecryptionFailed
 		}
 		n := copy(decryptedFrame, frameData)
@@ -454,6 +456,8 @@ func (s *Session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 
 	parsed, err := frame.Parse(frameData)
 	if err != nil {
+		s.stats.DecryptFailures++
+
 		return 0, err
 	}
 
@@ -520,6 +524,7 @@ func (s *Session) Decrypt(userID godave.UserID, frameData []byte, decryptedFrame
 		return n, nil
 	}
 
+	s.stats.DecryptFailures++
 	if lastErr != nil {
 		return 0, lastErr
 	}

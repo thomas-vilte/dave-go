@@ -1,12 +1,52 @@
 package session
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/disgoorg/godave"
 	"github.com/thomas-vilte/dave-go/mediakeys"
 )
+
+// TestStats_DecryptFailuresCounted covers the Decrypt error paths that must
+// increment Stats.DecryptFailures: plaintext injected under active E2EE and a
+// DAVE-looking frame no epoch/sender can decrypt. Clean passthrough (no E2EE)
+// must NOT count.
+func TestStats_DecryptFailuresCounted(t *testing.T) {
+	cb := &kpCapturingCallbacks{}
+	s := New("123456789", cb)
+	buf := make([]byte, 64)
+
+	// No active epoch: clean passthrough, must not count.
+	if _, err := s.Decrypt("user1", []byte{0x01, 0x02, 0x03}, buf); err != nil {
+		t.Fatalf("passthrough decrypt: %v", err)
+	}
+	if got := s.Stats().DecryptFailures; got != 0 {
+		t.Fatalf("DecryptFailures after passthrough = %d, want 0", got)
+	}
+
+	// Active epoch + protocol v1: a non-DAVE frame is a plaintext injection.
+	s.mu.Lock()
+	s.activeEpoch = &epochState{id: 1, groupID: []byte("g"), senders: map[godave.UserID]*senderState{}}
+	s.protocolVersion = 1
+	s.mu.Unlock()
+	if _, err := s.Decrypt("user1", []byte{0x01, 0x02, 0x03}, buf); !errors.Is(err, ErrDecryptionFailed) {
+		t.Fatalf("plaintext under E2EE: err = %v, want ErrDecryptionFailed", err)
+	}
+	if got := s.Stats().DecryptFailures; got != 1 {
+		t.Fatalf("DecryptFailures after injection = %d, want 1", got)
+	}
+
+	// DAVE-looking frame (magic marker, >=11 bytes) with no known sender.
+	daveish := append(make([]byte, 12), 0xFA, 0xFA)
+	if _, err := s.Decrypt("user1", daveish, buf); err == nil {
+		t.Fatal("DAVE-looking frame with no known sender should fail")
+	}
+	if got := s.Stats().DecryptFailures; got != 2 {
+		t.Fatalf("DecryptFailures after unknown-sender frame = %d, want 2", got)
+	}
+}
 
 // TestStats_TransitionWindowsIncremented covers that entering the retention
 // window (activating a new epoch while a previous sendRatchet is set)

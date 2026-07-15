@@ -429,6 +429,7 @@ func (s *Session) processProposalBatchLocked(proposals []byte) (bool, error) {
 		allowed, err := s.proposalAllowedByDAVELocked(msg)
 		if err != nil {
 			// fail closed: if we can't inspect the proposal safely, reject it.
+			s.stats.ProposalsRejected++
 			s.logger.Warn("processProposalBatchLocked: rejecting proposal that failed inspection",
 				"error", err,
 				"index", i)
@@ -437,6 +438,7 @@ func (s *Session) processProposalBatchLocked(proposals []byte) (bool, error) {
 			continue
 		}
 		if !allowed {
+			s.stats.ProposalsRejected++
 			s.logger.Warn("processProposalBatchLocked: rejecting disallowed proposal sender/type",
 				"index", i)
 			remaining = remaining[len(wire):]
@@ -453,6 +455,7 @@ func (s *Session) processProposalBatchLocked(proposals []byte) (bool, error) {
 			// here on a well-formed message is more likely a crafted edge case
 			// than a benign limitation. Reject rather than let it bypass the
 			// expected-membership check via ProcessPublicMessage.
+			s.stats.ProposalsRejected++
 			s.logger.Warn("processProposalBatchLocked: rejecting proposal that failed inspection",
 				"error", err,
 				"index", i)
@@ -462,6 +465,7 @@ func (s *Session) processProposalBatchLocked(proposals []byte) (bool, error) {
 		}
 		if ok {
 			if _, exists := s.users[userID]; !exists {
+				s.stats.ProposalsRejected++
 				s.logger.Warn("processProposalBatchLocked: ignoring add proposal for unexpected user",
 					"user_id", userID,
 					"index", i)
