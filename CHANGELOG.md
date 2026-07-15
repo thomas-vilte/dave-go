@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [v0.5.1] - 2026-07-15
+
+[v0.5.1]: https://github.com/thomas-vilte/dave-go/compare/v0.5.0...v0.5.1
+
+In this release, we focused on improving system transparency by adding new tracking metrics. We introduced detailed statistics for decryption activities and proposal rejections to provide better insights into your workflows.
+
+### 📊 Analytics & Monitoring
+
+- We added comprehensive statistics for decryption tasks and proposal rejections to help monitor system health and decision logic.
+
 ## [v0.5.0] - 2026-07-14
 
 [v0.5.0]: https://github.com/thomas-vilte/dave-go/compare/v0.4.0...v0.5.0
