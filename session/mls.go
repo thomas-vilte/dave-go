@@ -813,6 +813,9 @@ func (s *Session) createGroupWithExternalSenderLocked() error {
 	if len(s.externalSenderPackage) == 0 {
 		return ErrNoExternalSender
 	}
+	if s.channelID == 0 {
+		return ErrNoChannelID
+	}
 	if err := s.ensureMLSClientLocked(); err != nil {
 		return err
 	}

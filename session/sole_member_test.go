@@ -1,9 +1,13 @@
 package session
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/binary"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/disgoorg/godave"
@@ -147,5 +151,76 @@ func TestSoleMemberReset_NoExternalSenderStaysPassthrough(t *testing.T) {
 	defer s.mu.RUnlock()
 	if s.activeEpoch != nil || s.sendRatchet != nil {
 		t.Fatal("expected no epoch when there is no external sender (passthrough)")
+	}
+}
+
+func TestExternalSenderPackage_GroupIDIsChannelID(t *testing.T) {
+	const channelID godave.ChannelID = 987654321
+	wantGroupID := binary.BigEndian.AppendUint64(nil, uint64(channelID))
+	externalSender := buildExternalSenderPackage(t)
+
+	tests := []struct {
+		name      string
+		steps     func(s *Session)
+		wantGroup bool
+	}{
+		{
+			name: "channel_first",
+			steps: func(s *Session) {
+				s.SetChannelID(channelID)
+				s.OnSelectProtocolAck(1)
+				s.OnDaveMLSExternalSenderPackage(externalSender)
+			},
+			wantGroup: true,
+		},
+		{
+			name: "channel_late",
+			steps: func(s *Session) {
+				s.OnSelectProtocolAck(1)
+				s.OnDaveMLSExternalSenderPackage(externalSender)
+				s.SetChannelID(channelID)
+			},
+			wantGroup: true,
+		},
+		{
+			name: "channel_unset",
+			steps: func(s *Session) {
+				s.OnSelectProtocolAck(1)
+				s.OnDaveMLSExternalSenderPackage(externalSender)
+			},
+		},
+		{
+			name: "reconnect_after_reset",
+			steps: func(s *Session) {
+				s.SetChannelID(channelID)
+				s.OnSelectProtocolAck(1)
+				s.OnDaveMLSExternalSenderPackage(externalSender)
+				s.OnDavePrepareEpoch(1, 1)
+				s.SetChannelID(channelID)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			s := New("123456789", &kpCapturingCallbacks{}, WithLogger(slog.New(slog.NewJSONHandler(&logs, nil))))
+			tt.steps(s)
+
+			if strings.Contains(logs.String(), `"level":"ERROR"`) {
+				t.Errorf("unexpected error logged:\n%s", logs.String())
+			}
+			s.mu.RLock()
+			defer s.mu.RUnlock()
+			if !tt.wantGroup {
+				if len(s.groupID) != 0 {
+					t.Fatalf("expected no group, got group ID %x", s.groupID)
+				}
+
+				return
+			}
+			if !bytes.Equal(s.groupID, wantGroupID) {
+				t.Fatalf("group ID = %x, want %x", s.groupID, wantGroupID)
+			}
+		})
 	}
 }

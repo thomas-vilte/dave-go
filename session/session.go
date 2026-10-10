@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -282,6 +283,7 @@ func (s *Session) MaxSupportedProtocolVersion() int {
 func (s *Session) SetChannelID(channelID godave.ChannelID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	groupDeferred := s.channelID == 0 && len(s.externalSenderPackage) > 0
 	s.channelID = channelID
 	// Re-bind from baseLogger so the channel_id rides on every subsequent log
 	// line while preserving whatever fields the integrator bound (e.g. guild_id).
@@ -290,6 +292,12 @@ func (s *Session) SetChannelID(channelID godave.ChannelID) {
 		"user_id", string(s.userID),
 		"channel_id", uint64(channelID),
 	)
+	if !groupDeferred {
+		return
+	}
+	if err := s.createGroupWithExternalSenderLocked(); err != nil {
+		s.logger.Error("failed to create mls group with external sender", "error", err)
+	}
 }
 
 func (s *Session) AssignSsrcToCodec(ssrc uint32, codec godave.Codec) {
@@ -733,7 +741,13 @@ func (s *Session) OnDaveMLSExternalSenderPackage(externalSenderPackage []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.externalSenderPackage = append([]byte(nil), externalSenderPackage...)
-	if err := s.createGroupWithExternalSenderLocked(); err != nil {
+	err := s.createGroupWithExternalSenderLocked()
+	if errors.Is(err, ErrNoChannelID) {
+		s.logger.Debug("deferring mls group creation until the channel ID is set")
+
+		return
+	}
+	if err != nil {
 		s.logger.Error("failed to create mls group with external sender", "error", err)
 	}
 }

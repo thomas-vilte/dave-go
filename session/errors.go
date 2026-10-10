@@ -16,6 +16,7 @@ var (
 	ErrEmptyProposal             = errors.New("session: empty marshaled proposal")
 	ErrInvalidExternalSender     = errors.New("session: invalid external sender for joined welcome")
 	ErrNoExternalSender          = errors.New("session: no external sender package available")
+	ErrNoChannelID               = errors.New("session: no channel ID set")
 	ErrNoPreCommitState          = errors.New("session: no pre-commit state to restore")
 	ErrExpectedWelcome           = errors.New("session: expected Welcome in MLSMessage")
 	ErrProposalsTooMany          = errors.New("session: too many proposal refs in revoke batch")
