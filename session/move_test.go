@@ -89,6 +89,61 @@ func (c *shardDownCallbacks) invalidCommitCount() int {
 	return c.invalidCommits
 }
 
+// failingKPCallbacks fails the first failures key package sends with a
+// non-transient error, then captures the rest.
+type failingKPCallbacks struct {
+	kpCapturingCallbacks
+	failures int
+}
+
+func (c *failingKPCallbacks) SendMLSKeyPackage(kp []byte) error {
+	c.mu.Lock()
+	if c.failures > 0 {
+		c.failures--
+		c.mu.Unlock()
+
+		return errors.New("websocket: close sent")
+	}
+	c.mu.Unlock()
+
+	return c.kpCapturingCallbacks.SendMLSKeyPackage(kp)
+}
+
+// TestExternalSenderPackage_ResendsUnsentKeyPackage verifies that a key package
+// the gateway never received is not used to build the MLS group: the session
+// sends a fresh one first, and builds no group if that send fails too.
+func TestExternalSenderPackage_ResendsUnsentKeyPackage(t *testing.T) {
+	tests := []struct {
+		name      string
+		failures  int
+		wantGroup bool
+	}{
+		{name: "resend succeeds", failures: 1, wantGroup: true},
+		{name: "resend fails", failures: 2, wantGroup: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cb := &failingKPCallbacks{failures: tt.failures}
+			s := New("123456789", cb)
+			s.SetChannelID(987654321)
+			s.OnSelectProtocolAck(1)
+			s.OnDaveMLSExternalSenderPackage(buildExternalSenderPackage(t))
+
+			s.mu.RLock()
+			defer s.mu.RUnlock()
+			if got := len(s.groupID) > 0; got != tt.wantGroup {
+				t.Fatalf("group created = %v, want %v", got, tt.wantGroup)
+			}
+			if !tt.wantGroup {
+				return
+			}
+			if !bytes.Equal(s.pendingKeyPackage, cb.lastKeyPackage()) {
+				t.Fatal("group built from a key package the gateway never received")
+			}
+		})
+	}
+}
+
 // TestOnSelectProtocolAck_DiscardsPreviousChannelState verifies that
 // select_protocol_ack (sent by Discord whenever the bot joins/moves to a
 // voice channel) fully discards an established session's MLS/epoch state and
