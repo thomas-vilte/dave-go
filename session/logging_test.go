@@ -162,12 +162,7 @@ func TestDebugLogsCarryNoKeyMaterial(t *testing.T) {
 	if !strings.Contains(sessionLogs.String(), `msg="joined group"`) {
 		t.Error("mls-go's join was not logged through the session logger")
 	}
-	for line := range strings.Lines(defaultLogs.String()) {
-		// Recovery watchdogs left running by earlier tests can log here
-		// through their own sessions' default loggers.
-		if strings.Contains(line, "dave_session=") && !strings.Contains(line, "dave_session="+s.id) {
-			continue
-		}
-		t.Errorf("logged through slog.Default instead of the session logger:\n%s", line)
+	if defaultLogs.Len() != 0 {
+		t.Errorf("logged through slog.Default instead of the session logger:\n%s", defaultLogs.String())
 	}
 }

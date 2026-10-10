@@ -26,8 +26,13 @@ var _ io.Closer = (*Session)(nil)
 // no longer occupies.
 func (s *Session) Close() error {
 	s.shutdownOnce.Do(func() {
+		s.watchdogMu.Lock()
 		s.shutdownCancel()
-		close(s.shutdownDone)
+		s.watchdogMu.Unlock()
+		go func() {
+			s.watchdogs.Wait()
+			close(s.shutdownDone)
+		}()
 	})
 
 	return nil
@@ -35,7 +40,10 @@ func (s *Session) Close() error {
 
 // WaitShutdown blocks until every watchdog spawned before Close() has
 // exited, or ctx is done. Use this on orderly process shutdown if you need
-// a guarantee that no dave-go goroutine outlives the program.
+// a guarantee that no dave-go goroutine outlives the program. A watchdog
+// that is firing holds the session lock while it calls the callbacks, so
+// calling this from a callback, or while holding a lock the callbacks need,
+// can block until ctx is done.
 func (s *Session) WaitShutdown(ctx context.Context) error {
 	select {
 	case <-s.shutdownDone:
@@ -43,4 +51,15 @@ func (s *Session) WaitShutdown(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// goWatchdog runs watchdog on a goroutine that WaitShutdown waits for. It
+// does nothing once Close has been called, so no Add can race the Wait.
+func (s *Session) goWatchdog(watchdog func()) {
+	s.watchdogMu.Lock()
+	defer s.watchdogMu.Unlock()
+	if s.shutdownCtx.Err() != nil {
+		return
+	}
+	s.watchdogs.Go(watchdog)
 }

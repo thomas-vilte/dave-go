@@ -19,6 +19,7 @@ func setupActiveSoleMemberSessionWithKey(t *testing.T) (*Session, *ecdsa.Private
 
 	pkg, extPriv := buildExternalSenderPackageWithKey(t)
 	s := New("123456789", testCallbacks{})
+	closeAtCleanup(t, s)
 	s.SetChannelID(987654321)
 	s.OnSelectProtocolAck(1)
 	s.OnDaveMLSExternalSenderPackage(pkg)

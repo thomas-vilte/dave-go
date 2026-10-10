@@ -137,6 +137,8 @@ type Session struct {
 	shutdownCancel context.CancelFunc
 	shutdownOnce   sync.Once
 	shutdownDone   chan struct{}
+	watchdogMu     sync.Mutex
+	watchdogs      sync.WaitGroup
 }
 
 type epochState struct {

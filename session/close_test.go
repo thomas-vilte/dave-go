@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -141,6 +142,110 @@ func TestWaitShutdown_RespectsContext(t *testing.T) {
 	err := s.WaitShutdown(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+// closeAtCleanup closes s when the test ends and waits for its watchdogs, so
+// none of them outlives the test and logs into a later one.
+func closeAtCleanup(t *testing.T, s *Session) {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = s.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := s.WaitShutdown(ctx); err != nil {
+			t.Errorf("WaitShutdown: %v", err)
+		}
+	})
+}
+
+type blockingInvalidCallbacks struct {
+	testCallbacks
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingInvalidCallbacks) SendInvalidCommitWelcome(uint16) error {
+	select {
+	case c.entered <- struct{}{}:
+	default:
+	}
+	<-c.release
+
+	return nil
+}
+
+func TestWaitShutdown_WaitsForRunningWatchdog(t *testing.T) {
+	tests := []struct {
+		name string
+		arm  func(t *testing.T, s *Session)
+	}{
+		{
+			name: "recovery",
+			arm: func(t *testing.T, s *Session) {
+				t.Helper()
+				s.mu.Lock()
+				s.watchRecoveryLocked()
+				s.mu.Unlock()
+			},
+		},
+		{
+			name: "commit",
+			arm: func(t *testing.T, s *Session) {
+				t.Helper()
+				pkg, extPriv := buildExternalSenderPackageWithKey(t)
+				s.SetChannelID(987654321)
+				s.OnDaveMLSExternalSenderPackage(pkg)
+				s.OnDavePrepareTransition(0, 1)
+				const joiner = "222222222"
+				s.AddUser(joiner)
+				s.OnDaveMLSProposals(buildProposalBatch(addProposalBytesForUser(t, s, extPriv, joiner)))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cb := &blockingInvalidCallbacks{entered: make(chan struct{}, 1), release: make(chan struct{})}
+			s := newRecoveryTestSession(t, cb)
+			release := sync.OnceFunc(func() { close(cb.release) })
+			t.Cleanup(release)
+
+			tt.arm(t, s)
+			select {
+			case <-cb.entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("watchdog never fired")
+			}
+			_ = s.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			if err := s.WaitShutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("WaitShutdown returned %v while a watchdog was running, want context.DeadlineExceeded", err)
+			}
+
+			release()
+			ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := s.WaitShutdown(ctx); err != nil {
+				t.Fatalf("WaitShutdown after the watchdog exited: %v", err)
+			}
+		})
+	}
+}
+
+func TestWaitShutdown_NoWatchdogAfterClose(t *testing.T) {
+	s := New("123456789", testCallbacks{})
+	_ = s.Close()
+
+	never := make(chan struct{})
+	t.Cleanup(func() { close(never) })
+	s.goWatchdog(func() { <-never })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := s.WaitShutdown(ctx); err != nil {
+		t.Fatalf("WaitShutdown waited for a watchdog started after Close: %v", err)
 	}
 }
 

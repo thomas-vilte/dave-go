@@ -926,7 +926,7 @@ func (s *Session) watchRecoveryLocked() {
 	transitionID := s.pendingTransitionID
 	attempt := s.recoveryAttempts
 	timeout := s.recoveryTimeout
-	go func() {
+	s.goWatchdog(func() {
 		select {
 		case <-ready:
 			// Epoch activated (or a newer invalidation took over supervision).
@@ -953,7 +953,7 @@ func (s *Session) watchRecoveryLocked() {
 			_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
 		}
 		s.invalidateAndResendKeyPackageLocked()
-	}()
+	})
 }
 
 func (s *Session) commitProposalsLocked() error {
@@ -1070,7 +1070,7 @@ func (s *Session) commitProposalsLocked() error {
 	ready := s.epochReady
 	transitionID := s.pendingTransitionID
 	timeout := s.recoveryTimeout
-	go func() {
+	s.goWatchdog(func() {
 		select {
 		case <-ready:
 			// Epoch activated normally — nothing to do.
@@ -1093,7 +1093,7 @@ func (s *Session) commitProposalsLocked() error {
 			_ = s.callbacks.SendInvalidCommitWelcome(transitionID)
 		}
 		s.invalidateAndResendKeyPackageLocked()
-	}()
+	})
 
 	return nil
 }

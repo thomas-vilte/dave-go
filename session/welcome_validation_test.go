@@ -99,6 +99,7 @@ func TestOnDaveMLSWelcome_ValidatesExternalSender(t *testing.T) {
 func TestOnDaveMLSWelcome_RejectsMismatchedExternalSender(t *testing.T) {
 	cb := &kpCapturingCallbacks{}
 	s := New("123456789", cb)
+	closeAtCleanup(t, s)
 	s.SetChannelID(987654321)
 	s.OnSelectProtocolAck(1)
 	botKP := cb.lastKeyPackage()
