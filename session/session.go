@@ -955,11 +955,12 @@ func (s *Session) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byte) {
 	s.logger.Debug("OnDaveMLSWelcome", "transition_id", transitionID, "welcome_size", len(welcomeMessage))
 	s.pendingTransitionID = transitionID
 
-	// If we have a pending epoch it means we previously committed. A Welcome
-	// arriving means Discord DS chose another member's commit over ours — our
-	// commit was rejected. Roll back our local state to the pre-commit snapshot
-	// so that joinPendingWelcomeLocked operates from the correct epoch.
-	if s.pendingEpoch != nil {
+	// A Welcome after our own commit means Discord DS chose another member's
+	// commit over ours. Roll back to the pre-commit snapshot so that
+	// joinPendingWelcomeLocked operates from the correct epoch. Any other
+	// pending epoch, from a peer's commit or an earlier Welcome, has no
+	// snapshot to roll back to.
+	if len(s.pendingCommitBytes) > 0 {
 		s.logger.Debug("OnDaveMLSWelcome: our commit was rejected by DS (Welcome received), rolling back",
 			"transition_id", transitionID)
 		if err := s.restorePreCommitStateLocked(); err != nil {
