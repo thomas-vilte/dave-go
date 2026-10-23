@@ -146,8 +146,9 @@ func (s *Session) Stats() Stats {
 // handshake window, so audio senders hold frames until encryption is
 // established. This is godave.Session's contract ("sessions that never
 // establish E2EE always return true"), which disgo's voice layer gates on.
-// Encrypt never errors regardless — it falls back to passthrough — so callers
-// that don't gate on Ready still work correctly.
+// By default a missing key isn't an Encrypt error either — it falls back to
+// passthrough — so callers that don't gate on Ready still work.
+// WithStrictEncrypt changes that.
 //
 // State().Ready is narrower: whether frames are end-to-end encrypted, so it
 // stays false on a transport-only channel. WaitReady(ctx) blocks until the
@@ -166,7 +167,8 @@ func (s *Session) Ready() bool {
 // the session is ready to encrypt and when the channel will never have E2EE
 // (transport-only, protocol version 0), so gating on it never stalls a
 // sender forever. Frames sent while it returns true would go out in
-// passthrough (unencrypted) and be dropped by receivers expecting E2EE.
+// passthrough (unencrypted) and be dropped by receivers expecting E2EE, or
+// fail with ErrMissingKeyRatchet under WithStrictEncrypt.
 func (s *Session) ShouldHoldFrames() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

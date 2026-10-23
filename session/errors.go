@@ -23,6 +23,7 @@ var (
 	ErrNoActiveEpoch             = errors.New("session: no active E2EE epoch")
 	ErrInlineProposalInCommit    = errors.New("session: commit contains inline proposals (DAVE requires only references)")
 	ErrDuplicateGroupIdentity    = errors.New("session: duplicate user ID in group after commit")
+	ErrMissingKeyRatchet         = errors.New("session: no send key ratchet under E2EE")
 
 	// Deprecated: no longer returned.
 	ErrNoCodecForSSRC = errors.New("session: no codec assigned for ssrc")

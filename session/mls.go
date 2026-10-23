@@ -721,12 +721,12 @@ func (s *Session) markRecoveredLocked(epochID uint64) {
 //
 // The cached external sender is reused to recreate the group when the gateway
 // did not resend it. If there is no external sender context (a protocol-version-0
-// session) this is a no-op and the session stays in passthrough. Must be called
-// with s.mu held.
+// session) this is a no-op and the session has no send key. Must be called with
+// s.mu held.
 func (s *Session) activateSoleMemberEpochLocked() {
 	if len(s.groupID) == 0 {
 		if len(s.externalSenderPackage) == 0 {
-			// No E2EE context yet (e.g. protocol version 0): stay in passthrough.
+			// No E2EE context yet (e.g. protocol version 0): no send key.
 			return
 		}
 		if err := s.createGroupWithExternalSenderLocked(); err != nil {
@@ -771,6 +771,7 @@ func (s *Session) activatePendingEpochLocked() {
 
 	s.activeEpoch = s.pendingEpoch
 	s.pendingEpoch = nil
+	s.sendProtocolVersion = s.protocolVersion
 	if s.protocolVersion != 0 && s.plaintextRejectedFrom.IsZero() {
 		s.plaintextRejectedFrom = time.Now().Add(s.plaintextGrace)
 	}
