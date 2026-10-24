@@ -708,9 +708,20 @@ func (s *Session) markRecoveredLocked(epochID uint64) {
 	if s.degradedSince.IsZero() {
 		return
 	}
-	s.stats.DegradedDuration += time.Since(s.degradedSince)
-	s.logger.Info("session recovered", "degraded_for", time.Since(s.degradedSince).String(), "epoch_id", epochID)
+	s.logger.Info("session recovered", "degraded_for", s.endDegradedLocked().String(), "epoch_id", epochID)
+}
+
+// endDegradedLocked clears the degraded clock, adding the interval to
+// DegradedDuration so it isn't lost, and returns it; 0 if not degraded.
+func (s *Session) endDegradedLocked() time.Duration {
+	if s.degradedSince.IsZero() {
+		return 0
+	}
+	degradedFor := time.Since(s.degradedSince)
+	s.stats.DegradedDuration += degradedFor
 	s.degradedSince = time.Time{}
+
+	return degradedFor
 }
 
 // activateSoleMemberEpochLocked transitions the bot to its own sole-member local

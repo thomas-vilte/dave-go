@@ -12,7 +12,7 @@ var _ io.Closer = (*Session)(nil)
 
 // Close cancels the session's internal context so the recovery and
 // commit-confirm watchdogs exit promptly. Call it when discarding the
-// session (channel move, voice disconnect). It is fire-and-forget: it
+// session (voice disconnect). It is fire-and-forget: it
 // returns immediately and does NOT wait for in-flight watchdogs to finish
 // (use WaitShutdown for that). Idempotent — safe to call multiple times.
 // It never fails; the error return exists to satisfy io.Closer and is

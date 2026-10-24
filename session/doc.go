@@ -28,9 +28,11 @@
 //
 // Lifecycle:
 //
-//	The session is single-use per voice connection. The integrator should
-//	call Session.Close() when the session is discarded (channel move, voice
-//	disconnect) so the internal recovery/commit watchdogs exit promptly.
+//	The session can be reused across channel moves and gateway reconnects:
+//	each select_protocol_ack resets it for the new connection, as disgo does
+//	with one session per voice Conn. The integrator should call
+//	Session.Close() when the session is discarded (voice disconnect) so the
+//	internal recovery/commit watchdogs exit promptly.
 //	The watchdogs are time-bounded (at most maxRecoveryAttempts retries of
 //	recoveryTimeout each, plus the key package back-off while the gateway is
 //	down, ~83s worst case), so a missed Close is not a
