@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/disgoorg/godave"
+	"github.com/thomas-vilte/dave-go/frame"
 	"github.com/thomas-vilte/dave-go/mediakeys"
 	"github.com/thomas-vilte/mls-go"
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -359,4 +361,115 @@ func TestCommitSend_ShardNotReady_RollsBackAndArmsRecovery(t *testing.T) {
 
 		return invalid > 0
 	}, "recovery watchdog not armed after the commit was dropped")
+}
+
+// TestOnSelectProtocolAck_V0AfterMoveDropsSendKey covers a session moved from
+// an E2EE channel to one without: listeners there can't decrypt the old key,
+// so ack(0) must leave the session as a fresh version 0 session would be.
+func TestOnSelectProtocolAck_V0AfterMoveDropsSendKey(t *testing.T) {
+	s := New("123456789", testCallbacks{})
+	closeAtCleanup(t, s)
+	s.SetChannelID(987654321)
+	s.OnSelectProtocolAck(1)
+	s.OnDaveMLSExternalSenderPackage(buildExternalSenderPackage(t))
+	s.OnDavePrepareTransition(0, 1)
+
+	plaintext := []byte("audio")
+	out := make([]byte, s.MaxEncryptedFrameSize(len(plaintext)))
+	n, err := s.Encrypt(1, plaintext, out)
+	if err != nil || !frame.LooksLikeDAVEFrame(out[:n]) {
+		t.Fatalf("SETUP: Encrypt = %x, %v; want a DAVE frame", out[:n], err)
+	}
+	transitionWindows := s.Stats().TransitionWindows
+	s.mu.Lock()
+	hadActiveEpoch := s.activeEpoch != nil
+	s.pendingEpoch = &epochState{id: 6}
+	s.retainedEpoch = []*epochState{{id: 4}}
+	s.mu.Unlock()
+	if !hadActiveEpoch {
+		t.Fatal("SETUP: no active epoch before the move")
+	}
+
+	s.SetChannelID(111111111)
+	s.OnSelectProtocolAck(0)
+
+	n, err = s.Encrypt(1, plaintext, out)
+	if err != nil || !bytes.Equal(out[:n], plaintext) {
+		t.Fatalf("Encrypt after the move = %x, %v; want the frame passed through", out[:n], err)
+	}
+	if got := s.State(); got != (State{}) {
+		t.Errorf("State() = %+v, want the zero State of a fresh version 0 session", got)
+	}
+	if !s.Ready() {
+		t.Error("Ready() = false, want true at version 0")
+	}
+	if got := s.Stats().TransitionWindows; got != transitionWindows {
+		t.Errorf("TransitionWindows = %d, want %d: the old key was retained", got, transitionWindows)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.activeEpoch != nil || s.pendingEpoch != nil || s.retainedEpoch != nil {
+		t.Errorf("activeEpoch %+v, pendingEpoch %+v, retainedEpoch %+v; want all nil",
+			s.activeEpoch, s.pendingEpoch, s.retainedEpoch)
+	}
+	if s.groupID != nil || s.mlsClient != nil || s.pendingKeyPackage != nil || s.retainedSendRatchet != nil || s.sendCipher != nil {
+		t.Errorf("groupID %x, mlsClient set %v, pendingKeyPackage %x, retainedSendRatchet set %v, sendCipher set %v; want all cleared",
+			s.groupID, s.mlsClient != nil, s.pendingKeyPackage, s.retainedSendRatchet != nil, s.sendCipher != nil)
+	}
+}
+
+// TestOnSelectProtocolAck_V0StopsRecovery checks that a recovery watchdog
+// armed on the previous connection doesn't fire after a move to version 0.
+func TestOnSelectProtocolAck_V0StopsRecovery(t *testing.T) {
+	cb := &countingCallbacks{}
+	s := newRecoveryTestSession(t, cb)
+	s.lockMLS()
+	s.invalidateAndResendKeyPackageLocked()
+	s.recoveryAttempts = 1
+	s.unlockMLS()
+	invalidBefore, _ := cb.counts()
+
+	s.OnSelectProtocolAck(0)
+	time.Sleep(10 * s.recoveryTimeout)
+
+	if invalid, _ := cb.counts(); invalid != invalidBefore {
+		t.Errorf("invalid_commit_welcome sent %d times after the move, want 0", invalid-invalidBefore)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.recoveryAttempts != 0 {
+		t.Errorf("recoveryAttempts = %d, want 0", s.recoveryAttempts)
+	}
+}
+
+// TestOnSelectProtocolAck_EndsDegradedInterval checks that an ack, as the
+// start of a new connection, clears DegradedSince without losing the interval
+// from DegradedDuration.
+func TestOnSelectProtocolAck_EndsDegradedInterval(t *testing.T) {
+	for _, version := range []uint16{0, 1} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			s := New("123456789", testCallbacks{})
+			closeAtCleanup(t, s)
+			const degradedFor = time.Second
+			s.mu.Lock()
+			s.degradedSince = time.Now().Add(-degradedFor)
+			s.mu.Unlock()
+
+			s.OnSelectProtocolAck(version)
+
+			if got := s.State().DegradedSince; !got.IsZero() {
+				t.Errorf("DegradedSince = %v, want zero", got)
+			}
+			got := s.Stats().DegradedDuration
+			if got < degradedFor {
+				t.Fatalf("DegradedDuration = %v, want >= %v", got, degradedFor)
+			}
+
+			s.OnSelectProtocolAck(version)
+
+			if again := s.Stats().DegradedDuration; again != got {
+				t.Errorf("DegradedDuration = %v after a second ack, want %v unchanged", again, got)
+			}
+		})
+	}
 }

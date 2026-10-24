@@ -14,8 +14,9 @@ type State struct {
 	// member before its epoch activates or a protocol-version-0 session.
 	Ready bool
 	// DegradedSince is when the session lost its epoch (zero while Ready,
-	// or if the session never degraded). Integrators can use it to stop
-	// sending frames or force a full voice reconnect after a threshold.
+	// after a select_protocol_ack, or if the session never degraded).
+	// Integrators can use it to stop sending frames or force a full voice
+	// reconnect after a threshold.
 	DegradedSince time.Time
 	// ProtocolVersion is the DAVE protocol version reported by the voice
 	// gateway via SELECT_PROTOCOL_ACK, PREPARE_EPOCH or PREPARE_TRANSITION.
@@ -77,9 +78,8 @@ type Stats struct {
 	TransitionWindows uint64
 	// DegradedDuration accumulates time spent in degraded state (no active
 	// E2EE epoch) across all recovery cycles that ended in
-	// markRecoveredLocked. Gaps that end when the session is closed without
-	// recovery are NOT counted — only recoveries that succeeded. Reflects the
-	// duration of MLS-induced outages the session actually fixed on its own.
+	// markRecoveredLocked or in a select_protocol_ack, which starts a new
+	// connection. Gaps that end when the session is closed are NOT counted.
 	DegradedDuration time.Duration
 	// TransportRetryDuration accumulates the wall-clock time this session
 	// spent inside retrySend backoff loops caused by "shard is not ready"

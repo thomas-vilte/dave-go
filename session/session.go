@@ -27,8 +27,9 @@ var _ godave.Session = (*Session)(nil)
 // on the concrete type — no type assertions needed.
 //
 // Create one with New, or hand CreateFunc to the voice layer and capture the
-// *Session via WithSessionHook. A Session is single-use per voice connection;
-// call Close when discarding it (channel move, disconnect).
+// *Session via WithSessionHook. A Session lasts as long as the voice layer's
+// connection object and survives channel moves and gateway reconnects, since
+// each select_protocol_ack starts it afresh; call Close when discarding it.
 //
 // The session releases its lock while a callback sends, so a callback may call
 // Encrypt, Decrypt, Ready, State and the other accessors. It must not call an
@@ -653,39 +654,46 @@ func (s *Session) OnSelectProtocolAck(protocolVersion uint16) {
 	s.protocolVersion = protocolVersion
 	s.sendProtocolVersion = protocolVersion
 	s.setTransportOnlyLocked(protocolVersion == 0)
-	if protocolVersion > 0 {
-		// select_protocol_ack always marks a new voice connection — reset all
-		// group state so stale data from a previous channel cannot block
-		// re-creation of the MLS group on the new connection.
-		s.activeEpoch = nil
-		s.pendingEpoch = nil
-		s.retainedEpoch = nil
-		s.groupID = nil
-		s.pendingGroupID = nil
-		s.pendingCommitBytes = nil
-		s.preCommitGroupState = nil
-		s.proposalQueue = nil
-		s.recoveryAttempts = 0
-		s.resetEpochReadyLocked()
-		// Keep the send ratchet (and counter) alive through the transition
-		// window (defensive padding, not spec-mandated — see retainedSendRatchet
-		// field doc): any in-flight frame encrypted with the old key is still
-		// decryptable by receivers in the same group who have it in their
-		// retained list. selectSendRatchetLocked will reset the counter when
-		// sendRetentionTTL elapses.
-		if s.sendRatchet != nil {
-			s.retainedSendRatchet = s.sendRatchet
-			s.retainedSendExpiresAt = time.Now().Add(s.sendRetentionTTL)
-			s.stats.TransitionWindows++
-		}
-		s.sendRatchet = nil
+	// select_protocol_ack always marks a new voice connection, including a
+	// channel move on the same session — reset all group state so stale data
+	// from a previous channel cannot block re-creation of the MLS group on the
+	// new connection.
+	s.activeEpoch = nil
+	s.pendingEpoch = nil
+	s.retainedEpoch = nil
+	s.groupID = nil
+	s.pendingGroupID = nil
+	s.pendingCommitBytes = nil
+	s.preCommitGroupState = nil
+	s.proposalQueue = nil
+	s.recoveryAttempts = 0
+	s.resetEpochReadyLocked()
+	s.endDegradedLocked()
+	s.pendingKeyPackage = nil
+	s.mlsClient = nil
+	if protocolVersion == 0 {
+		// Listeners on a channel without E2EE can't decrypt with the old key,
+		// so don't retain it.
+		s.dropSendKeysLocked()
 
-		s.pendingKeyPackage = nil
-		s.mlsClient = nil
-		if err := s.ensurePendingKeyPackageLocked(); err != nil {
-			s.logger.Error("failed to prepare key package on protocol ack", "error", err)
-			s.watchDroppedSendLocked(err)
-		}
+		return
+	}
+
+	// Keep the send ratchet (and counter) alive through the transition
+	// window (defensive padding, not spec-mandated — see retainedSendRatchet
+	// field doc): any in-flight frame encrypted with the old key is still
+	// decryptable by receivers in the same group who have it in their
+	// retained list. selectSendRatchetLocked will reset the counter when
+	// sendRetentionTTL elapses.
+	if s.sendRatchet != nil {
+		s.retainedSendRatchet = s.sendRatchet
+		s.retainedSendExpiresAt = time.Now().Add(s.sendRetentionTTL)
+		s.stats.TransitionWindows++
+	}
+	s.sendRatchet = nil
+	if err := s.ensurePendingKeyPackageLocked(); err != nil {
+		s.logger.Error("failed to prepare key package on protocol ack", "error", err)
+		s.watchDroppedSendLocked(err)
 	}
 }
 
@@ -760,11 +768,7 @@ func (s *Session) OnDaveExecuteTransition(transitionID uint16) {
 	// transition).
 	if s.protocolVersion == 0 {
 		s.stats.DowngradeToV0++
-		s.sendRatchet = nil
-		s.retainedSendRatchet = nil
-		s.retainedSendExpiresAt = time.Time{}
-		s.sendCipher = nil
-		s.sendCipherKey = nil
+		s.dropSendKeysLocked()
 		s.pendingEpoch = nil
 		s.pendingGroupID = nil
 		s.pendingCommitBytes = nil
@@ -1066,6 +1070,14 @@ func toCodecKind(codec godave.Codec) codecs.Kind {
 	default:
 		return codecs.CodecUnknown
 	}
+}
+
+func (s *Session) dropSendKeysLocked() {
+	s.sendRatchet = nil
+	s.retainedSendRatchet = nil
+	s.retainedSendExpiresAt = time.Time{}
+	s.sendCipher = nil
+	s.sendCipherKey = nil
 }
 
 func (s *Session) setTransportOnlyLocked(transportOnly bool) {
