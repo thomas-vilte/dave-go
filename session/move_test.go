@@ -473,3 +473,52 @@ func TestOnSelectProtocolAck_EndsDegradedInterval(t *testing.T) {
 		})
 	}
 }
+
+// TestSetChannelID_ClearsUsersOnlyOnChannelChange covers the user list a move
+// would otherwise carry into the new channel, where it lets through add
+// proposals for users who aren't there.
+func TestSetChannelID_ClearsUsersOnlyOnChannelChange(t *testing.T) {
+	tests := []struct {
+		name     string
+		from, to godave.ChannelID
+		wantKept bool
+	}{
+		{name: "first channel", from: 0, to: 987654321, wantKept: true},
+		{name: "reconnect to the same channel", from: 987654321, to: 987654321, wantKept: true},
+		{name: "move to another channel", from: 987654321, to: 111111111, wantKept: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := New("123456789", testCallbacks{})
+			closeAtCleanup(t, s)
+			if tt.from != 0 {
+				s.SetChannelID(tt.from)
+			}
+			s.AddUser("222222222")
+
+			s.SetChannelID(tt.to)
+
+			s.mu.RLock()
+			defer s.mu.RUnlock()
+			if _, kept := s.users["222222222"]; kept != tt.wantKept {
+				t.Errorf("user kept = %v, want %v", kept, tt.wantKept)
+			}
+		})
+	}
+}
+
+func TestSetChannelID_MoveRejectsAddForPreviousChannelUser(t *testing.T) {
+	s, extPriv := setupActiveSoleMemberSessionWithKey(t)
+	s.AddUser("222222222")
+	s.SetChannelID(111111111)
+	proposalBytes := addProposalBytesForUser(t, s, extPriv, "222222222")
+
+	s.OnDaveMLSProposals(buildProposalBatch(proposalBytes))
+
+	if got := memberCount(t, s); got != 1 {
+		t.Fatalf("member count after add for previous channel's user = %d, want 1", got)
+	}
+	if got := s.Stats().ProposalsRejected; got != 1 {
+		t.Fatalf("ProposalsRejected after add for previous channel's user = %d, want 1", got)
+	}
+}
