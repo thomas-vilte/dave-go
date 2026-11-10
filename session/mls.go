@@ -35,6 +35,10 @@ const (
 type mlsClientWrapper struct {
 	client *mls.Client
 	store  *memorystore.Store
+	// joinGroup is client.JoinGroup, swappable so a test can reach the
+	// recover in joinGroupLocked now that mls-go no longer panics on any
+	// Welcome we know of.
+	joinGroup func(ctx context.Context, welcome []byte) ([]byte, error)
 }
 
 type exporterAdapter struct {
@@ -115,7 +119,7 @@ func (s *Session) ensureMLSClientLocked() error {
 		return fmt.Errorf("create mls client: %w", err)
 	}
 
-	s.mlsClient = &mlsClientWrapper{client: client, store: store}
+	s.mlsClient = &mlsClientWrapper{client: client, store: store, joinGroup: client.JoinGroup}
 
 	return nil
 }
@@ -207,7 +211,7 @@ func (s *Session) joinGroupLocked(welcome []byte) (groupID []byte, err error) {
 			err = fmt.Errorf("%w: %v", errWelcomePanic, r)
 		}
 	}()
-	groupID, err = s.mlsClient.client.JoinGroup(context.Background(), welcome)
+	groupID, err = s.mlsClient.joinGroup(context.Background(), welcome)
 	if err != nil {
 		return nil, fmt.Errorf("join group from welcome: %w", err)
 	}
