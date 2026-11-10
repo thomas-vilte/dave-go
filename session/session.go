@@ -320,6 +320,9 @@ func (s *Session) MaxSupportedProtocolVersion() int {
 	return 1
 }
 
+// SetChannelID records the voice channel the session is in. Moving to another
+// channel clears the users added for the previous one, so call it before
+// delivering any of the new connection's events, as disgo's open() does.
 func (s *Session) SetChannelID(channelID godave.ChannelID) {
 	// disgo calls this holding its connection lock, which a watchdog sending
 	// under sendMu may be waiting for, so it never waits for sendMu.
@@ -330,6 +333,9 @@ func (s *Session) SetChannelID(channelID godave.ChannelID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	groupDeferred := s.channelID == 0 && len(s.externalSenderPackage) > 0
+	if s.channelID != 0 && channelID != s.channelID {
+		clear(s.users)
+	}
 	s.channelID = channelID
 	// Re-bind from baseLogger so the channel_id rides on every subsequent log
 	// line while preserving whatever fields the integrator bound (e.g. guild_id).
