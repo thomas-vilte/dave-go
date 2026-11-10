@@ -305,8 +305,7 @@ func CreateFunc(opts ...Option) godave.SessionCreateFunc {
 
 // newSessionID returns a short random hex id used to correlate every log line of
 // a single DAVE session. It's random rather than a counter so ids don't collide
-// across restarts or instances, and a move/recovery (which creates a fresh
-// session for the same channel) gets a distinct id.
+// across restarts or instances.
 func newSessionID() string {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
